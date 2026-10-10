@@ -15,6 +15,7 @@
     { id: 'ct-lookup', title: '帶入標準工時 CT.', note: '用料號到 P003 查工時' },
     { id: 'demand-hours', title: '計算需求工時', note: '各月產量 × CT.' },
     { id: 'summary', title: '彙總', note: '每月總工時、前三大料號' },
+    { id: 'rma', title: 'RMA 需求工時', note: '重工數量 × CT.' },
     { id: 'headcount', title: '現有人力', note: '在職人數與出勤' },
     { id: 'report', title: '人力需求報表', note: '加班、效率損失、良率' }
   ];

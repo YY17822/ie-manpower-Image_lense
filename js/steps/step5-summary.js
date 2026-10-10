@@ -2,9 +2,9 @@
  * 第 5 步：彙總
  *   在需求工時那一塊的下面（最後一列資料之後空一列）加三列，每格都是公式：
  *
- *     總需求工時          =SUM(N5:N74)                                       每月所有料號加總
+ *     Production 總需求工時   =SUM(N5:N74)                                    每月所有料號加總
  *     Top 3 總需求工時    =LARGE(N5:N74,1)+LARGE(N5:N74,2)+LARGE(N5:N74,3)   每月最大的三個相加
- *     Others 總需求工時   =N76-N77                                           總需求工時 − Top 3
+ *     Others 總需求工時   =N76-N77                                           Production − Top 3
  *
  *   這三列連同左邊的文字標籤圍成一塊：外框粗線、裡面細格線，標籤置中。
  *
@@ -32,7 +32,7 @@
   var TITLE = '需求工時';
   var SUFFIX = '_彙總';
   var TOP_N = 3;
-  var LABELS = { total: '總需求工時', top: 'Top 3 總需求工時', rest: 'Others 總需求工時' };
+  var LABELS = { total: 'Production 總需求工時', top: 'Top 3 總需求工時', rest: 'Others 總需求工時' };
 
   var S = {
     upload: null,         // 上傳的第 4 步檔案 { name, buffer }
@@ -111,11 +111,15 @@
     els.result = h('div', { class: 'sheet-area' });
     els.tops = h('div', { class: 'sheet-area' });
     els.exportBtn = h('button', { type: 'button', class: 'btn-primary', disabled: true, text: '匯出 Excel', onclick: onExport });
+    els.nextBtn = h('button', {
+      type: 'button', class: 'btn-secondary', disabled: true, text: '下一步：RMA 需求工時',
+      onclick: function () { IEApp.go('rma'); }
+    });
     els.exportNote = h('span', { class: 'export-note', 'aria-live': 'polite' });
 
     panel.appendChild(h('div', { class: 'step-head' },
       h('h1', { text: '彙總' }),
-      h('p', { text: '在需求工時下面加上每個月的總需求工時、前三大料號的合計（Top 3），以及其他料號的合計（Others，總需求工時減 Top 3）。每格都是公式，前三大的儲存格會標成淺橘色，數值是 0 的不算。' })));
+      h('p', { text: '在需求工時下面加上每個月正常生產的總需求工時（Production）、前三大料號的合計（Top 3），以及其他料號的合計（Others，Production 減 Top 3）。每格都是公式，前三大的儲存格會標成淺橘色，數值是 0 的不算。' })));
 
     panel.appendChild(h('ol', { class: 'tasks' },
       h('li', { class: 'task' },
@@ -130,7 +134,7 @@
       h('li', { class: 'task' },
         h('h2', { text: '匯出' }),
         els.summary, els.notes, els.result, els.tops,
-        h('div', { class: 'actions' }, els.exportBtn, els.exportNote))));
+        h('div', { class: 'actions' }, els.exportBtn, els.nextBtn, els.exportNote))));
 
     els.startRow.addEventListener('change', function () {
       settings.startRow = els.startRow.value;
@@ -193,6 +197,7 @@
     var step4 = IEApp.state.withDemand;
     IEApp.state.withSummary = null;
     els.exportBtn.disabled = true;
+    els.nextBtn.disabled = true;
     els.notes.textContent = '';
     els.result.textContent = '';
     els.tops.textContent = '';
@@ -269,6 +274,7 @@
       restRow: plan.restRow,
       build: function () { return buildWorkbook(src, opts); }
     };
+    els.nextBtn.disabled = false;
   }
 
   function setSummary(text, isError, isWarn) {

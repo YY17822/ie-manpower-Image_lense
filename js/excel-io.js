@@ -1242,6 +1242,7 @@
   /* ---------- 彙總：每月總需求工時、前三大、其他 ---------- */
 
   var TOP_FILL_ARGB = 'FFFFD8A8';     // 淺橘色
+  var LABEL_WIDTH = 26;               // 文字標籤那一行至少要多寬，才放得下「Production 總需求工時」
 
   // 料號那一行最後一列有內容的列號（彙總列在它下面，不算資料）
   function lastKeyRow(ws, keyCol, dataStartRow) {
@@ -1323,9 +1324,9 @@
 
   /*
    * 把彙總寫進工作表（最後一列資料之後空一列開始，共三列），每格都是公式：
-   *   總需求工時          =SUM(N5:N74)
-   *   Top 3 總需求工時    =LARGE(N5:N74,1)+LARGE(N5:N74,2)+LARGE(N5:N74,3)
-   *   Others 總需求工時   =N76-N77          （總需求工時 − Top 3）
+   *   Production 總需求工時   =SUM(N5:N74)
+   *   Top 3 總需求工時        =LARGE(N5:N74,1)+LARGE(N5:N74,2)+LARGE(N5:N74,3)
+   *   Others 總需求工時       =N76-N77          （Production − Top 3）
    *
    * 外觀：文字標籤放在需求工時左邊那一行、置中；標籤加上各月共七行、三列圍成一塊，
    *       外框粗線、裡面細格線。
@@ -1398,7 +1399,7 @@
         cell.value = texts[i];
       });
       var labelColumn = main.getColumn(plan.labelCol);
-      if (!labelColumn.width || labelColumn.width < 22) labelColumn.width = 22;
+      if (!labelColumn.width || labelColumn.width < LABEL_WIDTH) labelColumn.width = LABEL_WIDTH;
     }
 
     // 前三大標淺橘色：先拿掉之前加在這一塊的規則，再加一條涵蓋所有月份的規則。
@@ -1428,6 +1429,144 @@
     return plan;
   }
 
+  /* ---------- RMA 需求工時：使用者自己輸入的項目 ---------- */
+
+  /*
+   * 先找出 RMA 區塊要放在哪裡，不動工作表。
+   *
+   * 參數和 planSummary 一樣，另外：
+   *   o.summaryMark   彙總第一列標籤裡一定會有的字（用來確認第 5 步做過了），例如 '總需求工時'
+   *
+   * 回傳：
+   *   found       找不找得到放的位置；找不到時 reason = 'demand'（沒有需求工時）、
+   *               'rows'（沒有資料）、'summary'（還沒做彙總）
+   *   startRow    RMA 區塊的第一列（彙總最後一列之後空一列）
+   *   labelCol    項目名稱放在哪一行（需求工時左邊那一行）
+   *   ctCol       CT. 放在哪一行（項目名稱左邊那一行）
+   *   startCol / width   各月從哪一行開始、共幾個月
+   *   headers     各月的表頭文字
+   */
+  function planRma(main, o) {
+    var sp = planSummary(main, o);
+    if (!sp.found) return { found: false, reason: 'demand' };
+    if (!sp.lastRow) return { found: false, reason: 'rows' };
+    var mark = sp.labelCol ? main.findCell(sp.totalRow, sp.labelCol) : null;
+    if (!mark || normalizeText(displayText(mark)).indexOf(o.summaryMark) < 0) {
+      return { found: false, reason: 'summary' };
+    }
+    return {
+      found: true,
+      startRow: sp.restRow + 2,
+      restRow: sp.restRow,
+      labelCol: sp.labelCol,
+      ctCol: sp.labelCol > 1 ? sp.labelCol - 1 : 0,
+      startCol: sp.startCol,
+      width: sp.width,
+      headers: sp.months.map(function (m) { return m.header; })
+    };
+  }
+
+  /*
+   * 把 RMA 區塊寫進工作表（彙總下面空一列）：
+   *
+   *   第一列   RMA總需求工時    =SUM(N81:N83)        底下各項目的合計
+   *   項目列   項目名稱         =120*L81             這個月的重工數量 × 左邊那一格的 CT.
+   *
+   * 項目名稱左邊那一格放 CT.（數字），第一列的同一個位置寫「CT.」當作標題。
+   * 數量是使用者在畫面上輸入的，直接寫在公式裡；之後在 Excel 改 CT. 那一格，工時會跟著變。
+   * 外觀和彙總那一塊一樣：外框粗線、裡面細格線；第一列的標籤置中，項目名稱靠左。
+   *
+   * o.items  = [{ name, ct, qty: [各月數量] }]
+   * o.labels = { title: 'RMA總需求工時', ct: 'CT.' }
+   * 其餘參數和 planRma 一樣，回傳的也是同一份結果（多了 firstItemRow、lastRow）。
+   */
+  function addRmaRows(main, o) {
+    var plan = planRma(main, o);
+    if (!plan.found) return plan;
+    var items = o.items || [];
+    var top = plan.startRow;
+    var first = top + 1;
+    var last = top + items.length;
+    var endCol = plan.startCol + plan.width - 1;
+
+    // 重做時，把彙總下面原本的內容清掉（這一塊以下都是 RMA）
+    eachStoredRow(main, function (row, r) {
+      if (r < top) return;
+      eachStoredCell(row, function (cell) { cell.value = null; cell.style = {}; });
+    });
+
+    var THIN = { style: 'thin' }, THICK = { style: 'medium' };
+    function boxBorder(r, c) {
+      return {
+        top: r === top ? THICK : THIN,
+        bottom: r === last ? THICK : THIN,
+        left: c === plan.labelCol ? THICK : THIN,
+        right: c === endCol ? THICK : THIN
+      };
+    }
+    var sample = main.findCell(o.dataStartRow, plan.startCol);
+    var font = sample && sample.style && sample.style.font ? Object.assign({}, sample.style.font) : undefined;
+    if (font) delete font.bold;
+    function styled(extra) {
+      var st = Object.assign({}, extra);
+      if (font) st.font = font;
+      return st;
+    }
+
+    // 第一列：標籤、CT. 標題、各月合計
+    var titleCell = main.getCell(top, plan.labelCol);
+    titleCell.style = styled({ border: boxBorder(top, plan.labelCol), alignment: { horizontal: 'center', vertical: 'middle' } });
+    titleCell.value = o.labels.title;
+    if (plan.ctCol) {
+      var ctHead = main.getCell(top, plan.ctCol);
+      ctHead.style = styled({ alignment: { horizontal: 'center', vertical: 'middle' } });
+      ctHead.value = o.labels.ct;
+    }
+    var ctL = plan.ctCol ? numToCol(plan.ctCol) : '';
+    for (var c = plan.startCol; c <= endCol; c++) {
+      var i = c - plan.startCol;
+      var L = numToCol(c);
+      var total = 0;
+      items.forEach(function (it) { total += (it.qty[i] || 0) * it.ct; });
+      var sumCell = main.getCell(top, c);
+      sumCell.style = styled({ numFmt: INTEGER_FORMAT, border: boxBorder(top, c), alignment: { vertical: 'middle' } });
+      sumCell.value = items.length
+        ? { formula: 'SUM(' + L + first + ':' + L + last + ')', result: total }
+        : 0;
+    }
+
+    // 項目列
+    items.forEach(function (it, k) {
+      var r = first + k;
+      var nameCell = main.getCell(r, plan.labelCol);
+      nameCell.style = styled({ border: boxBorder(r, plan.labelCol), alignment: { horizontal: 'left', vertical: 'middle' } });
+      nameCell.value = it.name;
+      if (plan.ctCol) {
+        var ctCell = main.getCell(r, plan.ctCol);
+        ctCell.style = styled({ numFmt: 'General', alignment: { vertical: 'middle' } });
+        ctCell.value = it.ct;
+      }
+      for (var c = plan.startCol; c <= endCol; c++) {
+        var qty = it.qty[c - plan.startCol] || 0;
+        var cell = main.getCell(r, c);
+        cell.style = styled({ numFmt: INTEGER_FORMAT, border: boxBorder(r, c), alignment: { vertical: 'middle' } });
+        cell.value = plan.ctCol
+          ? { formula: String(qty) + '*' + ctL + r, result: qty * it.ct }
+          : qty * it.ct;
+      }
+    });
+
+    var labelColumn = main.getColumn(plan.labelCol);
+    if (!labelColumn.width || labelColumn.width < LABEL_WIDTH) labelColumn.width = LABEL_WIDTH;
+
+    var wb = main.workbook;
+    if (wb) wb.calcProperties = Object.assign({}, wb.calcProperties, { fullCalcOnLoad: true });
+
+    plan.firstItemRow = first;
+    plan.lastRow = last;
+    return plan;
+  }
+
   function toBlob(workbook) {
     return workbook.xlsx.writeBuffer().then(function (buf) {
       return new Blob([buf], {
@@ -1437,7 +1576,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 8,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 9,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,
@@ -1466,6 +1605,9 @@
     addDemandColumns: addDemandColumns,
     planSummary: planSummary,
     addSummaryRows: addSummaryRows,
+    planRma: planRma,
+    addRmaRows: addRmaRows,
+    toNumber: toNumber,
     toBlob: toBlob
   };
 
