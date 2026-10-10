@@ -1051,33 +1051,6 @@
 
   /* ---------- 需求工時：各月數量 × CT. ---------- */
 
-  var MONTH_NAME = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i;
-
-  /*
-   * 找出某一行的「月份」表頭文字。
-   * MPS 的表頭有好幾層（有的跨欄、有的佔兩三格），做法是把這一行在表頭列裡的文字都拿出來，
-   * 只留「含英文字、而且不是 MPS（大小寫不分）」的；大標題那一列（第 1 列）不看。
-   * 有好幾個符合時，優先取看起來像月份的（Jan、Feb…），其次取純英文字的，再其次取最下面那一個。
-   * 都找不到就回傳空字串。
-   */
-  function monthLabel(ws, col, headerEnd) {
-    var texts = [];
-    for (var r = headerEnd >= 2 ? 2 : 1; r <= headerEnd; r++) {
-      var row = ws.findRow(r);
-      var cell = row ? row.findCell(col) : null;
-      var t = cell ? normalizeText(displayText(cell)).replace(/\s+/g, ' ') : '';
-      if (!t || texts.indexOf(t) >= 0) continue;
-      if (!/[A-Za-z]/.test(t) || t.toUpperCase() === 'MPS') continue;
-      texts.push(t);
-    }
-    if (!texts.length) return '';
-    var month = texts.filter(function (t) { return MONTH_NAME.test(t); });
-    if (month.length) return month[month.length - 1];
-    var pure = texts.filter(function (t) { return /^[A-Za-z.' -]+$/.test(t); });
-    if (pure.length) return pure[pure.length - 1];
-    return texts[texts.length - 1];
-  }
-
   // 儲存格的值當成數字用；公式結果是錯誤（#DIV/0! 等）時回傳 { error }
   function numberOrError(cell) {
     var raw = cellRawValue(cell);
@@ -1116,7 +1089,7 @@
    * o.monthCols     各月數量在哪幾行（陣列，第一個是當月）
    * o.ctCol         CT. 在哪一行
    * o.title         大表頭文字，例如 '需求工時'
-   * o.headers       （可省略）各月的小表頭文字；沒給就用 monthLabel() 從 MPS 的表頭找
+   * o.headers       各月的小表頭文字（使用者自己輸入的月份）
    *
    * 公式：當月 =(WIP+當月數量)*CT.，其餘各月 =數量*CT.
    *
@@ -1136,8 +1109,7 @@
     var lastRow = ext.lastRow;
 
     var headers = o.monthCols.map(function (c, i) {
-      var given = o.headers && o.headers[i] !== undefined ? normalizeText(o.headers[i]) : '';
-      return given || monthLabel(main, c, headerEnd);
+      return o.headers && o.headers[i] !== undefined ? normalizeText(o.headers[i]) : '';
     });
 
     var ctL = numToCol(o.ctCol), wipL = numToCol(o.wipCol);
@@ -1181,6 +1153,8 @@
       errors: errors
     };
   }
+
+  var INTEGER_FORMAT = '#,##0';
 
   function centered(style) {
     return Object.assign({}, style, {
@@ -1250,7 +1224,7 @@
         var cell = main.getCell(item.row, start + i);
         var base = main.findCell(item.row, o.monthCols[i]);
         var style = Object.assign({}, base ? base.style : {});
-        style.numFmt = '#,##0.00';
+        style.numFmt = INTEGER_FORMAT;                 // 只顯示整數（儲存格裡的數值仍保留小數）
         if (item.noCt) style.fill = MISSING_FILL;
         cell.style = style;
         cell.value = { formula: item.formulas[i], result: item.values[i] };
@@ -1258,6 +1232,195 @@
     });
 
     for (c = start; c <= end; c++) main.getColumn(c).width = 12;
+
+    var wb = main.workbook;
+    if (wb) wb.calcProperties = Object.assign({}, wb.calcProperties, { fullCalcOnLoad: true });
+
+    return plan;
+  }
+
+  /* ---------- 彙總：每月總需求工時、前三大、其他 ---------- */
+
+  var TOP_FILL_ARGB = 'FFFFD8A8';     // 淺橘色
+
+  // 料號那一行最後一列有內容的列號（彙總列在它下面，不算資料）
+  function lastKeyRow(ws, keyCol, dataStartRow) {
+    var last = 0;
+    eachStoredRow(ws, function (row, r) {
+      if (r < dataStartRow) return;
+      var cell = row.findCell(keyCol);
+      if (cell && normalizeText(displayText(cell)) !== '') last = Math.max(last, r);
+    });
+    return last;
+  }
+
+  /*
+   * 先算出彙總結果，不動工作表（給畫面預覽用）。
+   *
+   * o.dataStartRow  資料從第幾列開始
+   * o.keyCol        料號在哪一行（用來判斷資料到第幾列、以及顯示前三大是誰）
+   * o.title         需求工時那一塊的大表頭文字，用來找出它在哪幾行
+   * o.topN          前幾大（預設 3）
+   *
+   * 回傳：
+   *   found       有沒有找到需求工時那一塊
+   *   startCol / width   需求工時從哪一行開始、共幾行（幾個月）
+   *   firstRow / lastRow 資料的第一列、最後一列
+   *   totalRow / topRow / restRow  三個彙總列的列號（最後一列資料之後空一列開始）
+   *   labelCol    彙總列的文字標籤放在哪一行（需求工時左邊那一行）
+   *   months      [{ col, header, total, top, rest, error, topRows: [{ row, label, value }] }]
+   *               topRows 只列數值大於 0 的
+   */
+  function planSummary(main, o) {
+    var headerEnd = o.dataStartRow - 1;
+    var block = findBlock(main, headerEnd, o.title);
+    if (!block) return { found: false };
+    var lastRow = lastKeyRow(main, o.keyCol, o.dataStartRow);
+    if (!lastRow) return { found: true, startCol: block.col, width: block.width, months: [], firstRow: 0, lastRow: 0 };
+    var topN = o.topN || 3;
+    var subRow = headerEnd >= 3 ? 3 : headerEnd;
+
+    var months = [];
+    for (var c = block.col; c < block.col + block.width; c++) {
+      var items = [];
+      var error = null;
+      for (var r = o.dataStartRow; r <= lastRow; r++) {
+        var row = main.findRow(r);
+        var cell = row ? row.findCell(c) : null;
+        var v = numberOrError(cell);
+        if (v.error) { if (!error) error = v.error; continue; }
+        var keyCell = row ? row.findCell(o.keyCol) : null;
+        items.push({ row: r, label: keyCell ? displayText(keyCell) : '', value: v.value });
+      }
+      var total = 0;
+      items.forEach(function (it) { total += it.value; });
+      // 前幾大：數值是 0（或負數）的不算，免得一堆 0 也被當成前三大
+      var sorted = items.filter(function (it) { return it.value > 0; })
+        .sort(function (a, b) { return b.value - a.value || a.row - b.row; });
+      var topRows = sorted.slice(0, topN);
+      var top = 0;
+      topRows.forEach(function (it) { top += it.value; });
+      var headCell = subRow >= 1 ? main.findCell(subRow, c) : null;
+      months.push({
+        col: c, header: headCell ? displayText(headCell) : '',
+        total: total, top: top, rest: total - top, error: error, topRows: topRows
+      });
+    }
+
+    return {
+      found: true,
+      startCol: block.col,
+      width: block.width,
+      firstRow: o.dataStartRow,
+      lastRow: lastRow,
+      totalRow: lastRow + 2,
+      topRow: lastRow + 3,
+      restRow: lastRow + 4,
+      labelCol: block.col > 1 ? block.col - 1 : 0,
+      months: months
+    };
+  }
+
+  /*
+   * 把彙總寫進工作表（最後一列資料之後空一列開始，共三列），每格都是公式：
+   *   總需求工時          =SUM(N5:N74)
+   *   Top 3 總需求工時    =LARGE(N5:N74,1)+LARGE(N5:N74,2)+LARGE(N5:N74,3)
+   *   Others 總需求工時   =N76-N77          （總需求工時 − Top 3）
+   *
+   * 外觀：文字標籤放在需求工時左邊那一行、置中；標籤加上各月共七行、三列圍成一塊，
+   *       外框粗線、裡面細格線。
+   *
+   * 每個月前三大的儲存格用「條件式格式」標上淺橘色：數值改了，標示會跟著變。
+   * 規則是「大於 0，而且不小於該月第三大的數值」，所以 0 不會被標示。
+   *
+   * o.labels = { total, top, rest }  三列的文字標籤
+   * 其餘參數和 planSummary 一樣，回傳的也是同一份結果。
+   */
+  function addSummaryRows(main, o) {
+    var plan = planSummary(main, o);
+    if (!plan.found || !plan.lastRow) return plan;
+    var dataRows = plan.lastRow - plan.firstRow + 1;
+    var topN = Math.min(o.topN || 3, dataRows);
+    var endCol = plan.startCol + plan.width - 1;
+    var leftCol = plan.labelCol || plan.startCol;       // 整塊最左邊那一行
+    var rows = [plan.totalRow, plan.topRow, plan.restRow];
+    var texts = [o.labels.total, o.labels.top, o.labels.rest];
+
+    // 重做時，先把這三列原本的內容清掉
+    rows.forEach(function (r) {
+      var row = main.findRow(r);
+      if (!row) return;
+      eachStoredCell(row, function (cell) { cell.value = null; cell.style = {}; });
+    });
+
+    // 框線：最外圍粗線，裡面細線
+    var THIN = { style: 'thin' }, THICK = { style: 'medium' };
+    function boxBorder(r, c) {
+      return {
+        top: r === rows[0] ? THICK : THIN,
+        bottom: r === rows[rows.length - 1] ? THICK : THIN,
+        left: c === leftCol ? THICK : THIN,
+        right: c === endCol ? THICK : THIN
+      };
+    }
+    // 字型跟資料列一樣（不加粗）
+    var sample = main.findCell(plan.lastRow, plan.startCol);
+    var font = sample && sample.style && sample.style.font ? Object.assign({}, sample.style.font) : undefined;
+    if (font) delete font.bold;
+
+    plan.months.forEach(function (m) {
+      var L = numToCol(m.col);
+      var range = L + plan.firstRow + ':' + L + plan.lastRow;
+      var large = [];
+      for (var k = 1; k <= topN; k++) large.push('LARGE(' + range + ',' + k + ')');
+      var formulas = [
+        'SUM(' + range + ')',
+        large.join('+'),
+        L + plan.totalRow + '-' + L + plan.topRow
+      ];
+      var results = m.error ? [{ error: m.error }, { error: m.error }, { error: m.error }] : [m.total, m.top, m.rest];
+      rows.forEach(function (r, i) {
+        var cell = main.getCell(r, m.col);
+        var style = { numFmt: INTEGER_FORMAT, border: boxBorder(r, m.col), alignment: { vertical: 'middle' } };
+        if (font) style.font = font;
+        cell.style = style;
+        cell.value = { formula: formulas[i], result: results[i] };
+      });
+    });
+
+    // 文字標籤：需求工時左邊那一行，置中；行寬不夠就加寬到放得下
+    if (plan.labelCol) {
+      rows.forEach(function (r, i) {
+        var cell = main.getCell(r, plan.labelCol);
+        var style = { border: boxBorder(r, plan.labelCol), alignment: { horizontal: 'center', vertical: 'middle' } };
+        if (font) style.font = font;
+        cell.style = style;
+        cell.value = texts[i];
+      });
+      var labelColumn = main.getColumn(plan.labelCol);
+      if (!labelColumn.width || labelColumn.width < 22) labelColumn.width = 22;
+    }
+
+    // 前三大標淺橘色：先拿掉之前加在這一塊的規則，再加一條涵蓋所有月份的規則。
+    // 公式寫的是左上角那一格（例如 N5），Excel 會自動套用到範圍裡的每一格：
+    //   =AND(N5>0, N5>=LARGE(N$5:N$74,3))    大於 0，而且不小於這個月第三大的數值
+    var blockRef = function (ref) {
+      var m = /^([A-Z]+)\d+:([A-Z]+)\d+$/.exec(String(ref || ''));
+      return !!m && colToNum(m[1]) >= plan.startCol && colToNum(m[2]) <= endCol;
+    };
+    main.conditionalFormattings = (main.conditionalFormattings || []).filter(function (cf) {
+      return !blockRef(cf.ref);
+    });
+    var firstL = numToCol(plan.startCol), lastL = numToCol(endCol);
+    main.addConditionalFormatting({
+      ref: firstL + plan.firstRow + ':' + lastL + plan.lastRow,
+      rules: [{
+        type: 'expression', priority: 1,
+        formulae: ['AND(' + firstL + plan.firstRow + '>0,' + firstL + plan.firstRow + '>=LARGE(' +
+          firstL + '$' + plan.firstRow + ':' + firstL + '$' + plan.lastRow + ',' + topN + '))'],
+        style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: TOP_FILL_ARGB } } }
+      }]
+    });
 
     var wb = main.workbook;
     if (wb) wb.calcProperties = Object.assign({}, wb.calcProperties, { fullCalcOnLoad: true });
@@ -1274,7 +1437,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 6,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 8,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,
@@ -1299,9 +1462,10 @@
     lookupFormula: lookupFormula,
     addLookupColumn: addLookupColumn,
     findHeaderColumn: findHeaderColumn,
-    monthLabel: monthLabel,
     planDemand: planDemand,
     addDemandColumns: addDemandColumns,
+    planSummary: planSummary,
+    addSummaryRows: addSummaryRows,
     toBlob: toBlob
   };
 

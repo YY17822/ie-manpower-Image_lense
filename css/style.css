@@ -124,7 +124,7 @@ button.step:hover { background: rgba(11, 110, 105, 0.07); }
 }
 .task h2 { font-size: 1.1875rem; line-height: 2rem; font-weight: 700; margin-bottom: 0.75rem; }
 
-.hint { font-size: 0.875rem; color: var(--ink-2); margin-top: 0.375rem; }
+.hint { font-size: 0.875rem; color: var(--ink-2); margin-top: 0.375rem; overflow-wrap: anywhere; }
 
 .field-row { display: flex; align-items: center; gap: 0.625rem; flex-wrap: wrap; }
 .field-row + .field-row { margin-top: 0.625rem; }
@@ -255,6 +255,10 @@ button.step:hover { background: rgba(11, 110, 105, 0.07); }
 /* 對照結果表、注意事項 */
 .sheet.is-result .colhead { padding: 0.375rem 0.625rem; white-space: nowrap; }
 .sheet.is-result tr.is-missing td { background: #FFD9D9; }
+.sheet.is-result td.is-top { background: #FFD8A8; }   /* 和 Excel 裡前三大的淺橘色一樣 */
+.sheet.is-tops td { text-align: left; }
+.sheet.is-tops .top-name { display: block; font-weight: 700; }
+.sheet.is-tops .top-value { display: block; color: var(--ink-2); }
 .notes { max-width: 44rem; margin: 0.75rem 0 0; padding-left: 1.25rem; font-size: 0.9375rem; }
 .notes:empty { display: none; }
 .notes li + li { margin-top: 0.375rem; }

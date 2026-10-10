@@ -7,8 +7,9 @@
  *     其餘月 = 數量 * CT.                 例如 =F5*L5
  *
  *   結果從 MPS 工作表「原本最後一行之後空一行」開始填，每格都是公式。
- *   表頭：第 2 列是跨所有月份置中的「需求工時」，第 3 列到表頭最後一列是各月的月份
- *        （取自該月數量那一行的表頭：含英文字、而且不是 MPS 的那一個）。
+ *   表頭：第 2 列是跨所有月份置中的「需求工時」，第 3 列到表頭最後一列是各月的月份。
+ *        月份由使用者自己輸入，程式不會自己去 MPS 的表頭找。
+ *   數值只顯示整數（儲存格裡仍保留小數，加總時用的是完整的數值）。
  *
  *   預設的行（照第 1 步保留的順序）：第 4 行是 WIP，第 5 到第 10 行是當月和往後五個月。
  *
@@ -43,7 +44,7 @@
     upload: null,         // 上傳的第 3 步檔案 { name, buffer }
     preferUpload: false,
     work: null,           // 拿來預覽、統計的活頁簿 { src, loading, error, wb, main, mainExt }
-    headerEdits: {}       // 使用者自己改過的月份表頭 { 行號: 文字 }
+    headerEdits: {}       // 使用者輸入的月份表頭 { 行號: 文字 }
   };
   var settings = loadSettings();
   var els = {};
@@ -135,6 +136,10 @@
     els.notes = h('ul', { class: 'notes' });
     els.result = h('div', { class: 'sheet-area' });
     els.exportBtn = h('button', { type: 'button', class: 'btn-primary', disabled: true, text: '匯出 Excel', onclick: onExport });
+    els.nextBtn = h('button', {
+      type: 'button', class: 'btn-secondary', disabled: true, text: '下一步：彙總',
+      onclick: function () { IEApp.go('summary'); }
+    });
     els.exportNote = h('span', { class: 'export-note', 'aria-live': 'polite' });
 
     panel.appendChild(h('div', { class: 'step-head' },
@@ -161,12 +166,12 @@
             h('label', { for: 'f4-start', text: 'MPS 的資料從第' }), els.startRow, els.startNote))),
       h('li', { class: 'task' },
         h('h2', { text: '各月的表頭' }),
-        h('p', { class: 'hint', text: '從 MPS 各月產量的表頭找出來的月份（含英文字、而且不是 MPS 的那一個）。不對的話可以直接改。' }),
+        h('p', { class: 'hint', text: '輸入每個月要顯示的表頭，例如 Oct、Nov。' }),
         els.headers),
       h('li', { class: 'task' },
         h('h2', { text: '匯出' }),
         els.summary, els.notes, els.result,
-        h('div', { class: 'actions' }, els.exportBtn, els.exportNote))));
+        h('div', { class: 'actions' }, els.exportBtn, els.nextBtn, els.exportNote))));
 
     els.wipCol.addEventListener('change', function () {
       settings.wipCol = els.wipCol.value;
@@ -221,7 +226,6 @@
     if (S.work && S.work.src === src.key) return;
     var work = { src: src.key, loading: true };
     S.work = work;
-    S.headerEdits = {};
     buildFrom(src).then(function (wb) {
       if (S.work !== work) return;
       var main = pickMain(wb, src);
@@ -258,6 +262,7 @@
     var step3 = IEApp.state.withCT;
     IEApp.state.withDemand = null;
     els.exportBtn.disabled = true;
+    els.nextBtn.disabled = true;
     els.notes.textContent = '';
     els.result.textContent = '';
 
@@ -318,7 +323,7 @@
       caption: work.main.name + ' 工作表（前 5 列資料）。標起來的是各月產量。'
     });
 
-    renderHeaderInputs(work.main, monthCols, headerEnd);
+    renderHeaderInputs(monthCols);
 
     if (!ctCol) {
       setSummary('MPS 工作表裡找不到表頭是「CT.」的那一行。請先做第 3 步帶入 CT.。', true);
@@ -336,12 +341,10 @@
       return;
     }
 
-    var headers = monthCols.map(function (mc) {
-      return S.headerEdits[mc] !== undefined ? S.headerEdits[mc] : XIO.monthLabel(work.main, mc, headerEnd);
-    });
+    var headers = monthCols.map(function (mc) { return S.headerEdits[mc] || ''; });
     var emptyHead = monthCols.filter(function (mc, i) { return !XIO.normalizeText(headers[i]); });
     if (emptyHead.length) {
-      setSummary(XIO.formatColumns(emptyHead) + ' 行找不到月份表頭。請在上面「各月的表頭」填入。', true);
+      setSummary('在上面「各月的表頭」輸入 ' + XIO.formatColumns(emptyHead) + ' 行的月份。');
       return;
     }
 
@@ -377,6 +380,7 @@
       monthCount: monthCols.length,
       build: function () { return buildWorkbook(src, opts); }
     };
+    els.nextBtn.disabled = false;
   }
 
   // 連續的行寫成 E:J，其餘用逗號分開
@@ -411,32 +415,31 @@
     els.ctInfo.textContent = '';
     els.mainPreview.textContent = '';
     els.headers.textContent = '';
+    els.headers.removeAttribute('data-cols');
   }
 
-  // 每個月一個輸入框，先填入找到的月份；使用者改過的會記在 S.headerEdits
-  function renderHeaderInputs(main, monthCols, headerEnd) {
-    var active = document.activeElement;
-    var activeCol = active && active.getAttribute ? active.getAttribute('data-month-col') : null;
+  // 每個月一個輸入框，由使用者輸入月份，記在 S.headerEdits。
+  // 月份的行沒變就不重畫，打字時才不會被打斷。
+  function renderHeaderInputs(monthCols) {
+    var key = monthCols.join(',');
+    if (els.headers.getAttribute('data-cols') === key && els.headers.childNodes.length) return;
+    els.headers.setAttribute('data-cols', key);
     els.headers.textContent = '';
     monthCols.forEach(function (mc, i) {
-      var found = XIO.monthLabel(main, mc, headerEnd);
-      var value = S.headerEdits[mc] !== undefined ? S.headerEdits[mc] : found;
       var id = 'f4-head-' + mc;
       var input = h('input', {
-        id: id, type: 'text', class: 'in in-month', autocomplete: 'off', value: value, 'data-month-col': String(mc)
+        id: id, type: 'text', class: 'in in-month', autocomplete: 'off',
+        value: S.headerEdits[mc] || '', placeholder: i === 0 ? '例如 Oct' : null
       });
-      input.addEventListener('change', function () {
+      input.addEventListener('input', function () {
         S.headerEdits[mc] = input.value;
         els.exportNote.textContent = '';
-        refresh();
+        clearTimeout(timer);
+        timer = setTimeout(function () { refresh(true); }, 250);
       });
       els.headers.appendChild(h('div', { class: 'month-head' },
         h('label', { for: id, text: XIO.numToCol(mc) + ' 行' + (i === 0 ? '（當月）' : '') }), input));
     });
-    if (activeCol) {
-      var again = els.headers.querySelector('[data-month-col="' + activeCol + '"]');
-      if (again) again.focus();
-    }
   }
 
   function setSummary(text, isError, isWarn) {
@@ -472,7 +475,7 @@
   function showNumber(v) {
     if (v && typeof v === 'object') return v.error;
     if (typeof v !== 'number') return v === null || v === undefined ? '' : String(v);
-    return (Math.round(v * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return Math.round(v).toLocaleString('en-US');          // 和 Excel 一樣只顯示整數
   }
 
   // 前幾筆的計算結果，以及第一筆每一格的公式
