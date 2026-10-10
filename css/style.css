@@ -141,6 +141,11 @@ button.step:hover { background: rgba(11, 110, 105, 0.07); }
 .in-tiny { width: 4.5rem; text-align: center; }
 .in-tiny:disabled { background: var(--bg); color: var(--ink-2); border-color: var(--line); }
 .in-select { width: min(100%, 24rem); }
+
+/* 標籤靠左對齊、選單排成一直行 */
+.field-grid { display: grid; grid-template-columns: max-content minmax(0, 24rem); gap: 0.625rem; align-items: center; }
+.field-grid label { font-weight: 700; }
+.field-grid .in-select { width: 100%; }
 .in-short { width: 12rem; }
 .in-wide { width: min(100%, 26rem); }
 
@@ -294,4 +299,6 @@ button.step:hover { background: rgba(11, 110, 105, 0.07); }
   .task { padding-left: 0; }
   .task::before { position: static; float: left; margin-right: 0.75rem; }
   .in-short, .in-wide { width: 100%; }
+  .field-grid { grid-template-columns: minmax(0, 1fr); gap: 0.25rem; }
+  .field-grid .in-select { margin-bottom: 0.5rem; }
 }

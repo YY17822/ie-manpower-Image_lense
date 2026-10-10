@@ -843,13 +843,56 @@
     return found;
   }
 
+  // 把儲存格的值當成數字：數字照用、文字的 "100" 也算；空白回傳 null；不是數字回傳 NaN
+  function toNumber(v) {
+    v = plainValue(v);
+    if (typeof v === 'number') return v;
+    if (v === null || v === undefined) return null;
+    if (v instanceof Date) return NaN;
+    var t = normalizeText(v).replace(/,/g, '');
+    if (t === '') return null;
+    var n = Number(t);
+    return isNaN(n) ? NaN : n;
+  }
+
+  // 取出 ref 第 r 列要帶回去的數值。有給 o.refDivCol 時是「取值行 ÷ 除數行」。
+  // 回傳 { value, error, numFmt, top, bottom }；error 是 Excel 會顯示的錯誤（例如 #DIV/0!）
+  function lookupValue(ref, r, o) {
+    var row = ref.findRow(r);
+    var topCell = row ? row.findCell(o.refValueCol) : null;
+    if (!o.refDivCol) {
+      return { value: plainValue(cellRawValue(topCell)), error: null, numFmt: topCell ? topCell.numFmt : undefined };
+    }
+    var bottomCell = row ? row.findCell(o.refDivCol) : null;
+    var top = toNumber(cellRawValue(topCell));
+    var bottom = toNumber(cellRawValue(bottomCell));
+    var out = {
+      value: null, error: null, numFmt: 'General',
+      top: topCell ? displayText(topCell) : '', bottom: bottomCell ? displayText(bottomCell) : ''
+    };
+    if (top !== null && isNaN(top)) out.error = '#VALUE!';
+    else if (bottom !== null && isNaN(bottom)) out.error = '#VALUE!';
+    else if (bottom === null || bottom === 0) out.error = '#DIV/0!';
+    else out.value = (top === null ? 0 : top) / bottom;
+    return out;
+  }
+
+  function sameResult(a, b) {
+    if (a.error || b.error) return a.error === b.error;
+    if (typeof a.value === 'number' && typeof b.value === 'number') {
+      return Math.abs(a.value - b.value) <= 1e-12 * Math.max(1, Math.abs(a.value), Math.abs(b.value));
+    }
+    return lookupKey(a.value) === lookupKey(b.value);
+  }
+
   /*
    * 先算出查表結果，不動工作表（給畫面預覽、統計用）。
    *
    * o.dataStartRow  main 的資料從第幾列開始
    * o.keyCol        main 拿來對照的行（放料號的那一行）
    * o.refKeyCol     ref 要在哪一行找料號
-   * o.refValueCol   ref 找到之後取哪一行的數值
+   * o.refValueCol   ref 找到之後取哪一行的數值（例如 Labor）
+   * o.refDivCol     （可省略）要除以 ref 的哪一行（例如 Base Qty）；有給的話帶回的是 取值行 ÷ 這一行
    * o.header        新增那一行的表頭文字，例如 'CT.'
    * o.index         （可省略）buildIndex(ref, o.refKeyCol) 的結果，重複計算時可以沿用
    *
@@ -858,10 +901,11 @@
    * 回傳：
    *   targetCol   要填入的行（原本最後一行之後空一行；已經有同名表頭就用那一行）
    *   isNew       是不是新增的行
-   *   rows        [{ row, key, label, refRow, value }]  refRow = 0 表示找不到
+   *   rows        [{ row, key, label, refRow, value, error, top, bottom }]  refRow = 0 表示找不到
    *   found / missing / blank   找到、找不到、料號空白的列數
+   *   errors      找到了、但算不出數值的列數（除數是 0 或空白、或不是數字）
    *   multi       找到的料號裡，有幾個在 ref 出現不只一列
-   *   multiDiff   其中有幾個「各列的數值不一樣」
+   *   multiDiff   其中有幾個「各列算出來的數值不一樣」
    */
   function planLookup(main, ref, o) {
     var headerEnd = o.dataStartRow - 1;
@@ -872,7 +916,7 @@
     var index = o.index || buildIndex(ref, o.refKeyCol);
 
     var rows = [];
-    var found = 0, missing = 0, blank = 0;
+    var found = 0, missing = 0, blank = 0, errors = 0;
     var multiKeys = {}, diffKeys = {};
     for (var r = o.dataStartRow; r <= ext.lastRow; r++) {
       var row = main.findRow(r);
@@ -880,23 +924,21 @@
       var key = lookupKey(cellRawValue(cell));
       if (key === '') { blank++; continue; }
       var hits = index[key];
-      var item = { row: r, key: key, label: displayText(cell), refRow: 0, value: null };
+      var item = { row: r, key: key, label: displayText(cell), refRow: 0, value: null, error: null };
       if (hits && hits.length) {
         found++;
+        var first = lookupValue(ref, hits[0], o);
         item.refRow = hits[0];
-        var refRow = ref.findRow(hits[0]);
-        var refCell = refRow ? refRow.findCell(o.refValueCol) : null;
-        item.value = plainValue(cellRawValue(refCell));
-        item.numFmt = refCell ? refCell.numFmt : undefined;
+        item.value = first.value;
+        item.error = first.error;
+        item.numFmt = first.numFmt;
+        item.top = first.top;
+        item.bottom = first.bottom;
+        if (first.error) errors++;
         if (hits.length > 1 && !multiKeys[key]) {
           multiKeys[key] = true;
-          var first = lookupKey(item.value);
           for (var i = 1; i < hits.length; i++) {
-            var rr = ref.findRow(hits[i]);
-            if (lookupKey(cellRawValue(rr ? rr.findCell(o.refValueCol) : null)) !== first) {
-              diffKeys[key] = true;
-              break;
-            }
+            if (!sameResult(first, lookupValue(ref, hits[i], o))) { diffKeys[key] = true; break; }
           }
         }
         item.multi = hits.length;
@@ -915,13 +957,22 @@
       found: found,
       missing: missing,
       blank: blank,
+      errors: errors,
       multi: Object.keys(multiKeys).length,
       multiDiff: Object.keys(diffKeys).length
     };
   }
 
+  // 某一列要填入的公式（不含開頭的 =），例如 'P003'!M5 或 'P003'!M5/'P003'!K5
+  function lookupFormula(refName, r, o) {
+    var prefix = sheetRef(refName);
+    var f = prefix + numToCol(o.refValueCol) + r;
+    if (o.refDivCol) f += '/' + prefix + numToCol(o.refDivCol) + r;
+    return f;
+  }
+
   /*
-   * 把查表結果寫進 main 工作表：每一列填入公式 ='P003'!M5，
+   * 把查表結果寫進 main 工作表：每一列填入公式（='P003'!M5 或 ='P003'!M5/'P003'!K5），
    * 點儲存格就看得到數值是從 ref 的哪一格來的。找不到的料號留空白並標上底色。
    * 參數和 planLookup 一樣，回傳的也是同一份結果。
    */
@@ -934,8 +985,6 @@
     var plan = planLookup(main, ref, o);
     var headerEnd = o.dataStartRow - 1;
     var col = plan.targetCol;
-    var prefix = sheetRef(ref.name);
-    var valueLetter = numToCol(o.refValueCol);
 
     // 表頭：樣式照抄對照那一行（料號那一行）的表頭，大標題那一列不動
     if (headerEnd >= 1) {
@@ -963,8 +1012,9 @@
         style.numFmt = item.numFmt || 'General';
         cell.style = style;
         cell.value = {
-          formula: prefix + valueLetter + item.refRow,
-          result: item.value === null || item.value === '' ? 0 : item.value
+          formula: lookupFormula(ref.name, item.refRow, o),
+          result: item.error ? { error: item.error }
+            : (item.value === null || item.value === '' ? 0 : item.value)
         };
       } else {
         style.fill = MISSING_FILL;
@@ -1000,7 +1050,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 4,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 5,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,
@@ -1022,6 +1072,7 @@
     lookupKey: lookupKey,
     buildIndex: buildIndex,
     planLookup: planLookup,
+    lookupFormula: lookupFormula,
     addLookupColumn: addLookupColumn,
     toBlob: toBlob
   };

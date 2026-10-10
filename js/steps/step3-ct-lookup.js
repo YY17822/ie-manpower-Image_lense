@@ -1,10 +1,10 @@
 /*
  * 第 3 步：帶入標準工時 CT.
  *   拿 MPS 工作表的料號（某一行），到 P003 工作表的某一行找相同的料號，
- *   找到後取那一列的某一行數值，填到 MPS 工作表「原本最後一行之後空一行」的位置，
- *   表頭是「CT.」。
+ *   找到後取那一列的 Labor ÷ Base Qty（P003 的 Labor 是做 Base Qty 個的工時，
+ *   除過之後才是單件工時），填到 MPS 工作表「原本最後一行之後空一行」的位置，表頭是「CT.」。
  *
- *   填入的是公式（例如 ='P003'!M5），之後在 Excel 點儲存格就能看到數值是從 P003 哪一格來的。
+ *   填入的是公式（例如 ='P003'!M5/'P003'!K5），之後在 Excel 點儲存格就能看到數值是從 P003 哪兩格算出來的。
  *   同一個料號在 P003 出現很多列時，取最上面那一列（和 VLOOKUP 一樣）。
  *   找不到的料號留空白，並標上淺紅色底。
  *
@@ -29,8 +29,10 @@
   var SUFFIX = '_CT';
   var KEY_HINT = /p\s*\/?\s*n|料號|part|material|型號/i;   // 猜哪一行是料號
   var NOT_KEY = /desc|說明|品名/i;
+  var LABOR_HINT = /labor|人工|工時/i;                      // 猜哪一行是 Labor
+  var BASE_HINT = /base\s*qty|base\s*quantity|基準|基本數量/i;  // 猜哪一行是 Base Qty
 
-  var DEFAULTS = { keyCol: '', refKeyCol: '', refValueCol: '', startRow: '' };
+  var DEFAULTS = { keyCol: '', refKeyCol: '', refValueCol: '', refDivCol: '', startRow: '' };
 
   // 這一步的狀態（切到別的步驟再回來時還在）
   var S = {
@@ -123,6 +125,7 @@
 
     els.refKeyCol = h('select', { id: 'f3-refkey', class: 'in-select' });
     els.refValueCol = h('select', { id: 'f3-refval', class: 'in-select' });
+    els.refDivCol = h('select', { id: 'f3-refdiv', class: 'in-select' });
     els.refPreview = h('div', { class: 'sheet-area' });
 
     els.summary = h('p', { class: 'summary', 'aria-live': 'polite' });
@@ -133,7 +136,7 @@
 
     panel.appendChild(h('div', { class: 'step-head' },
       h('h1', { text: '帶入標準工時 CT.' }),
-      h('p', { text: '拿 MPS 的料號到 P003 找同一個料號，把那一列的工時帶回 MPS，放在最後一行之後空一行的位置，表頭是「CT.」。填入的是公式，在 Excel 點儲存格就能看到數值是從 P003 哪一格來的。' })));
+      h('p', { text: '拿 MPS 的料號到 P003 找同一個料號，把那一列的 Labor ÷ Base Qty（單件工時）帶回 MPS，放在最後一行之後空一行的位置，表頭是「CT.」。填入的是公式，在 Excel 點儲存格就能看到數值是從 P003 哪兩格算出來的。' })));
 
     panel.appendChild(h('ol', { class: 'tasks' },
       h('li', { class: 'task' },
@@ -151,11 +154,12 @@
           h('div', { class: 'field-row' },
             h('label', { for: 'f3-start', text: 'MPS 的資料從第' }), els.startRow, els.startNote))),
       h('li', { class: 'task' },
-        h('h2', { text: 'P003 找哪一行、取哪一行' }),
-        h('div', { class: 'field-row' },
-          h('label', { for: 'f3-refkey', text: '在哪一行找料號' }), els.refKeyCol),
-        h('div', { class: 'field-row' },
-          h('label', { for: 'f3-refval', text: '找到後取哪一行' }), els.refValueCol),
+        h('h2', { text: 'P003 的料號、Labor、Base Qty' }),
+        h('div', { class: 'field-grid' },
+          h('label', { for: 'f3-refkey', text: '料號在' }), els.refKeyCol,
+          h('label', { for: 'f3-refval', text: 'Labor 在' }), els.refValueCol,
+          h('label', { for: 'f3-refdiv', text: 'Base Qty 在' }), els.refDivCol),
+        h('p', { class: 'hint', text: 'CT. = Labor ÷ Base Qty。P003 的 Labor 是做 Base Qty 個的工時，除過之後才是單件工時。' }),
         els.refPreview),
       h('li', { class: 'task' },
         h('h2', { text: '匯出' }),
@@ -165,6 +169,7 @@
     bindSelect(els.keyCol, 'keyCol');
     bindSelect(els.refKeyCol, 'refKeyCol');
     bindSelect(els.refValueCol, 'refValueCol');
+    bindSelect(els.refDivCol, 'refDivCol');
     els.startRow.addEventListener('change', function () {
       settings.startRow = els.startRow.value;
       saveSettings();
@@ -259,6 +264,12 @@
     }
     return 0;
   }
+  function guessColumn(labels, colCount, hint) {
+    for (var c = 1; c <= colCount; c++) {
+      if (labels[c] && hint.test(labels[c])) return c;
+    }
+    return 0;
+  }
 
   /* ---------- 更新畫面 ---------- */
   function refresh() {
@@ -310,11 +321,13 @@
 
     var keyCol = colOf(settings.keyCol, mainCols) || guessKeyColumn(mainLabels, mainCols);
     var refKeyCol = colOf(settings.refKeyCol, refCols) || guessKeyColumn(refLabels, refCols);
-    var refValueCol = colOf(settings.refValueCol, refCols);
+    var refValueCol = colOf(settings.refValueCol, refCols) || guessColumn(refLabels, refCols, LABOR_HINT);
+    var refDivCol = colOf(settings.refDivCol, refCols) || guessColumn(refLabels, refCols, BASE_HINT);
 
     fillSelect(els.keyCol, mainLabels, mainCols, keyCol);
     fillSelect(els.refKeyCol, refLabels, refCols, refKeyCol);
     fillSelect(els.refValueCol, refLabels, refCols, refValueCol);
+    fillSelect(els.refDivCol, refLabels, refCols, refDivCol);
 
     var keepMain = {}; if (keyCol) keepMain[keyCol] = true;
     ui.renderSheet(els.mainPreview, work.main, {
@@ -322,15 +335,18 @@
       caption: work.main.name + ' 工作表（前 5 列資料）。共 ' +
         Math.max(0, work.mainExt.lastRow - headerEnd).toLocaleString('en-US') + ' 列資料。'
     });
-    var keepRef = {}; if (refKeyCol) keepRef[refKeyCol] = true; if (refValueCol) keepRef[refValueCol] = true;
+    var keepRef = {};
+    [refKeyCol, refValueCol, refDivCol].forEach(function (c) { if (c) keepRef[c] = true; });
     ui.renderSheet(els.refPreview, work.ref, {
       headerEnd: work.refHeaderRow, lastRow: work.refExt.lastRow, colCount: refCols, rows: 6, keep: keepRef,
       caption: work.ref.name + ' 工作表（前 6 列資料）。共 ' + work.refExt.lastRow.toLocaleString('en-US') + ' 列。'
     });
 
     if (!keyCol) { setSummary('選擇 MPS 的料號在哪一行。'); return; }
-    if (!refKeyCol) { setSummary('選擇要在 P003 的哪一行找料號。'); return; }
-    if (!refValueCol) { setSummary('選擇找到料號之後，要取 P003 的哪一行。'); return; }
+    if (!refKeyCol) { setSummary('選擇 P003 的料號在哪一行。'); return; }
+    if (!refValueCol) { setSummary('選擇 P003 的 Labor 在哪一行。'); return; }
+    if (!refDivCol) { setSummary('選擇 P003 的 Base Qty 在哪一行。'); return; }
+    if (refDivCol === refValueCol) { setSummary('Labor 和 Base Qty 選到同一行了。請確認兩個各是哪一行。', true); return; }
 
     var indexKey = refKeyCol;
     if (!S.index || S.indexFor !== work || S.indexKey !== indexKey) {
@@ -339,11 +355,12 @@
       S.indexKey = indexKey;
     }
     var opts = {
-      dataStartRow: sr, keyCol: keyCol, refKeyCol: refKeyCol, refValueCol: refValueCol, header: HEADER
+      dataStartRow: sr, keyCol: keyCol, refKeyCol: refKeyCol,
+      refValueCol: refValueCol, refDivCol: refDivCol, header: HEADER
     };
     var plan = XIO.planLookup(work.main, work.ref, Object.assign({ index: S.index }, opts));
 
-    var keyL = XIO.numToCol(keyCol), refKeyL = XIO.numToCol(refKeyCol), refValL = XIO.numToCol(refValueCol);
+    var keyL = XIO.numToCol(keyCol), refKeyL = XIO.numToCol(refKeyCol);
     var targetL = XIO.numToCol(plan.targetCol);
 
     if (!plan.rows.length) {
@@ -352,7 +369,7 @@
     }
     if (!plan.found) {
       setSummary('MPS 的 ' + keyL + ' 行和 P003 的 ' + refKeyL + ' 行沒有任何相同的料號。請確認兩邊選的行對不對。', true);
-      renderResult(plan, refValL);
+      renderResult(plan, work.ref.name, opts);
       return;
     }
 
@@ -364,7 +381,7 @@
       false, plan.missing > 0);
 
     renderNotes(plan);
-    renderResult(plan, refValL);
+    renderResult(plan, work.ref.name, opts);
     els.exportBtn.disabled = false;
 
     // 給下一步用
@@ -378,7 +395,7 @@
   }
 
   function clearChoices() {
-    [els.keyCol, els.refKeyCol, els.refValueCol].forEach(function (sel) {
+    [els.keyCol, els.refKeyCol, els.refValueCol, els.refDivCol].forEach(function (sel) {
       sel.textContent = '';
       sel.appendChild(h('option', { value: '', text: '請選擇' }));
     });
@@ -414,36 +431,51 @@
       var text = '有 ' + plan.multi + ' 個料號在 P003 出現不只一列，一律取最上面那一列。';
       if (plan.multiDiff) {
         var diff = uniqueLabels(plan.rows, function (it) { return it.differs; });
-        text += '其中 ' + plan.multiDiff + ' 個各列的數值不一樣，請確認要用哪一列：' + listText(diff, 8) + '。';
+        text += '其中 ' + plan.multiDiff + ' 個各列算出來的 CT. 不一樣，請留意：' + listText(diff, 8) + '。';
       } else {
-        text += '這些料號各列的數值都相同，不影響結果。';
+        text += '這些料號各列算出來的 CT. 都相同，不影響結果。';
       }
       els.notes.appendChild(h('li', { class: plan.multiDiff ? 'is-warn' : null }, text));
+    }
+    if (plan.errors) {
+      var errs = uniqueLabels(plan.rows, function (it) { return !!it.error; });
+      els.notes.appendChild(h('li', { class: 'is-warn' },
+        '有 ' + plan.errors + ' 列算不出 CT.（Base Qty 是空白或 0，或 Labor、Base Qty 不是數字）：' +
+        listText(errs, 8) + '。Excel 裡這些格會顯示 #DIV/0! 或 #VALUE!。'));
     }
     if (plan.blank) {
       els.notes.appendChild(h('li', null, '另有 ' + plan.blank + ' 列的料號是空白，略過不填。'));
     }
   }
 
-  // 前幾筆的對照結果：哪個料號、對到 P003 第幾列、公式和數值
-  function renderResult(plan, refValL) {
+  function showNumber(v) {
+    if (v === null || v === undefined) return '';
+    if (typeof v !== 'number') return String(v);
+    return String(Math.round(v * 1e6) / 1e6);
+  }
+
+  // 前幾筆的對照結果：哪個料號、對到 P003 第幾列、Labor、Base Qty、公式和算出來的 CT.
+  function renderResult(plan, refName, opts) {
     els.result.textContent = '';
     var SHOW = 8;
     var head = h('tr', null,
       h('th', { class: 'colhead', scope: 'col', text: 'MPS 列' }),
       h('th', { class: 'colhead', scope: 'col', text: '料號' }),
       h('th', { class: 'colhead', scope: 'col', text: 'P003 列' }),
+      h('th', { class: 'colhead', scope: 'col', text: 'Labor' }),
+      h('th', { class: 'colhead', scope: 'col', text: 'Base Qty' }),
       h('th', { class: 'colhead', scope: 'col', text: '填入的公式' }),
       h('th', { class: 'colhead', scope: 'col', text: 'CT.' }));
     var body = h('tbody');
     plan.rows.slice(0, SHOW).forEach(function (it) {
-      var value = it.value === null || it.value === undefined ? '' : String(it.value);
       body.appendChild(h('tr', { class: it.refRow ? null : 'is-missing' },
         h('th', { class: 'rowhead', scope: 'row', text: String(it.row) }),
         h('td', { text: it.label }),
         h('td', { class: 'is-num', text: it.refRow ? String(it.refRow) + (it.multi > 1 ? '（共 ' + it.multi + ' 列）' : '') : '找不到' }),
-        h('td', { text: it.refRow ? "='" + REF_SHEET + "'!" + refValL + it.refRow : '' }),
-        h('td', { class: 'is-num is-kept', text: value })));
+        h('td', { class: 'is-num', text: it.refRow ? it.top : '' }),
+        h('td', { class: 'is-num', text: it.refRow ? it.bottom : '' }),
+        h('td', { text: it.refRow ? '=' + XIO.lookupFormula(refName, it.refRow, opts) : '' }),
+        h('td', { class: 'is-num is-kept', text: it.error ? it.error : showNumber(it.value) })));
     });
     var more = plan.rows.length - SHOW;
     els.result.appendChild(h('p', {
