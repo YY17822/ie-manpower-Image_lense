@@ -71,6 +71,10 @@
 
     els.summary = h('p', { class: 'summary', 'aria-live': 'polite' });
     els.exportBtn = h('button', { type: 'button', class: 'btn-primary', disabled: true, text: '匯出 Excel', onclick: onExport });
+    els.nextBtn = h('button', {
+      type: 'button', class: 'btn-secondary', disabled: true, text: '下一步：帶入 CT.',
+      onclick: function () { IEApp.go('ct-lookup'); }
+    });
     els.exportNote = h('span', { class: 'export-note', 'aria-live': 'polite' });
 
     panel.appendChild(h('div', { class: 'step-head' },
@@ -89,7 +93,7 @@
       h('li', { class: 'task' },
         h('h2', { text: '匯出' }),
         els.summary,
-        h('div', { class: 'actions' }, els.exportBtn, els.exportNote))));
+        h('div', { class: 'actions' }, els.exportBtn, els.nextBtn, els.exportNote))));
 
     els.sheetSelect.addEventListener('change', function () {
       pickSheet(parseInt(els.sheetSelect.value, 10));
@@ -172,6 +176,7 @@
     var step1 = IEApp.state.mpsFiltered;
     IEApp.state.withP003 = null;
     els.exportBtn.disabled = true;
+    els.nextBtn.disabled = true;
 
     // 第 1 步的 Excel
     if (!src) {
@@ -226,8 +231,11 @@
     IEApp.state.withP003 = {
       outName: outputName(src),
       sheets: sheets,
+      mainSheet: sheets[0],                                        // MPS 那張工作表的名稱
+      dataStartRow: src.kind === 'step1' ? step1.headerEnd + 1 : 0, // MPS 資料從第幾列開始（上傳的檔案不知道，給 0）
       build: function () { return buildWorkbook(src, p.ws); }
     };
+    els.nextBtn.disabled = false;
   }
 
   function setSummary(text, isError, isWarn) {

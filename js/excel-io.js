@@ -765,6 +765,232 @@
     return { worksheet: ws, lastRow: ext.lastRow, colCount: ext.colCount };
   }
 
+  /* ---------- 表頭文字 ---------- */
+
+  // 猜表頭在哪一列：前幾列當中，有值的格子最多的那一列（大標題通常只有一兩格有值）
+  function guessHeaderRow(ws, maxRows) {
+    var best = 1, bestCount = -1;
+    for (var r = 1; r <= (maxRows || 10); r++) {
+      var row = ws.findRow(r);
+      if (!row) continue;
+      var n = 0;
+      eachStoredCell(row, function (cell) {
+        if (cell.isMerged && cell.master !== cell) return;
+        var v = cell.value;
+        if (v !== null && v !== undefined && v !== '') n++;
+      });
+      if (n > bestCount) { bestCount = n; best = r; }
+    }
+    return best;
+  }
+
+  // 每一行的表頭文字（fromRow 到 toRow 之間，由上到下串起來；合併儲存格用左上角的字）
+  // 回傳陣列，labels[行號] = '2027/01 月合計'
+  function columnLabels(ws, fromRow, toRow, colCount) {
+    var labels = [];
+    for (var c = 1; c <= colCount; c++) {
+      var parts = [];
+      for (var r = fromRow; r <= toRow; r++) {
+        var row = ws.findRow(r);
+        var cell = row ? row.findCell(c) : null;
+        var t = cell ? normalizeText(displayText(cell)).replace(/\s+/g, ' ') : '';
+        if (t && parts.indexOf(t) < 0) parts.push(t);
+      }
+      labels[c] = parts.join(' ');
+    }
+    return labels;
+  }
+
+  /* ---------- 查表：用料號到另一張工作表找數值 ---------- */
+
+  // 料號比對用的鍵：去頭尾空白、全形轉半形、不分大小寫。
+  // 數字和文字的 123 視為相同，但 0012 和 12 不同（料號前面的 0 有意義）。
+  function lookupKey(v) {
+    v = plainValue(v);
+    if (v === null || v === undefined) return '';
+    if (v instanceof Date) return v.toISOString();
+    return normalizeText(v).toUpperCase();
+  }
+
+  // 把參照工作表的某一行做成索引：{ 鍵: [列號, 列號…] }（由上到下）
+  function buildIndex(ref, keyCol) {
+    var index = {};
+    eachStoredRow(ref, function (row, r) {
+      var k = lookupKey(cellRawValue(row.findCell(keyCol)));
+      if (k === '') return;
+      if (!index[k]) index[k] = [];
+      index[k].push(r);
+    });
+    return index;
+  }
+
+  function sheetRef(name) {
+    return "'" + String(name).replace(/'/g, "''") + "'!";
+  }
+
+  // 在表頭列裡找文字是 header 的那一行（重做這一步時，覆蓋原本那一行而不是再加一行）
+  function findHeaderColumn(ws, headerEnd, header) {
+    var want = lookupKey(header);
+    var found = 0;
+    for (var r = 1; r <= headerEnd && !found; r++) {
+      var row = ws.findRow(r);
+      if (!row) continue;
+      eachStoredCell(row, function (cell, c) {
+        if (found || (cell.isMerged && cell.master !== cell)) return;
+        if (lookupKey(cell.value) === want) found = c;
+      });
+    }
+    return found;
+  }
+
+  /*
+   * 先算出查表結果，不動工作表（給畫面預覽、統計用）。
+   *
+   * o.dataStartRow  main 的資料從第幾列開始
+   * o.keyCol        main 拿來對照的行（放料號的那一行）
+   * o.refKeyCol     ref 要在哪一行找料號
+   * o.refValueCol   ref 找到之後取哪一行的數值
+   * o.header        新增那一行的表頭文字，例如 'CT.'
+   * o.index         （可省略）buildIndex(ref, o.refKeyCol) 的結果，重複計算時可以沿用
+   *
+   * 同一個料號在 ref 出現很多列時，取最上面那一列（和 VLOOKUP 一樣）。
+   *
+   * 回傳：
+   *   targetCol   要填入的行（原本最後一行之後空一行；已經有同名表頭就用那一行）
+   *   isNew       是不是新增的行
+   *   rows        [{ row, key, label, refRow, value }]  refRow = 0 表示找不到
+   *   found / missing / blank   找到、找不到、料號空白的列數
+   *   multi       找到的料號裡，有幾個在 ref 出現不只一列
+   *   multiDiff   其中有幾個「各列的數值不一樣」
+   */
+  function planLookup(main, ref, o) {
+    var headerEnd = o.dataStartRow - 1;
+    var ext = extent(main);
+    var existing = findHeaderColumn(main, headerEnd, o.header);
+    var lastCol = ext.colCount;
+    var targetCol = existing || lastCol + 2;
+    var index = o.index || buildIndex(ref, o.refKeyCol);
+
+    var rows = [];
+    var found = 0, missing = 0, blank = 0;
+    var multiKeys = {}, diffKeys = {};
+    for (var r = o.dataStartRow; r <= ext.lastRow; r++) {
+      var row = main.findRow(r);
+      var cell = row ? row.findCell(o.keyCol) : null;
+      var key = lookupKey(cellRawValue(cell));
+      if (key === '') { blank++; continue; }
+      var hits = index[key];
+      var item = { row: r, key: key, label: displayText(cell), refRow: 0, value: null };
+      if (hits && hits.length) {
+        found++;
+        item.refRow = hits[0];
+        var refRow = ref.findRow(hits[0]);
+        var refCell = refRow ? refRow.findCell(o.refValueCol) : null;
+        item.value = plainValue(cellRawValue(refCell));
+        item.numFmt = refCell ? refCell.numFmt : undefined;
+        if (hits.length > 1 && !multiKeys[key]) {
+          multiKeys[key] = true;
+          var first = lookupKey(item.value);
+          for (var i = 1; i < hits.length; i++) {
+            var rr = ref.findRow(hits[i]);
+            if (lookupKey(cellRawValue(rr ? rr.findCell(o.refValueCol) : null)) !== first) {
+              diffKeys[key] = true;
+              break;
+            }
+          }
+        }
+        item.multi = hits.length;
+        item.differs = !!diffKeys[key];
+      } else {
+        missing++;
+      }
+      rows.push(item);
+    }
+
+    return {
+      targetCol: targetCol,
+      isNew: !existing,
+      lastCol: existing ? existing : lastCol,
+      rows: rows,
+      found: found,
+      missing: missing,
+      blank: blank,
+      multi: Object.keys(multiKeys).length,
+      multiDiff: Object.keys(diffKeys).length
+    };
+  }
+
+  /*
+   * 把查表結果寫進 main 工作表：每一列填入公式 ='P003'!M5，
+   * 點儲存格就看得到數值是從 ref 的哪一格來的。找不到的料號留空白並標上底色。
+   * 參數和 planLookup 一樣，回傳的也是同一份結果。
+   */
+  var MISSING_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFD9D9' } };
+  function isMissingFill(fill) {
+    return !!(fill && fill.fgColor && fill.fgColor.argb === MISSING_FILL.fgColor.argb);
+  }
+
+  function addLookupColumn(main, ref, o) {
+    var plan = planLookup(main, ref, o);
+    var headerEnd = o.dataStartRow - 1;
+    var col = plan.targetCol;
+    var prefix = sheetRef(ref.name);
+    var valueLetter = numToCol(o.refValueCol);
+
+    // 表頭：樣式照抄對照那一行（料號那一行）的表頭，大標題那一列不動
+    if (headerEnd >= 1) {
+      var top = headerEnd >= 2 ? 2 : 1;
+      if (plan.isNew) {
+        for (var r = top; r <= headerEnd; r++) {
+          var src = main.findCell(r, o.keyCol);
+          if (src) main.getCell(r, col).style = src.style;
+        }
+        if (headerEnd > top) main.mergeCellsWithoutStyle(top, col, headerEnd, col);
+      }
+      var headCell = main.getCell(top, col);
+      (headCell.isMerged ? headCell.master : headCell).value = o.header;
+    }
+
+    // 資料：樣式照抄原本最後一行（重做時沿用這一行原本的樣式），數字格式改用 ref 那一格的
+    var done = {};
+    plan.rows.forEach(function (item) {
+      var cell = main.getCell(item.row, col);
+      var base = main.findCell(item.row, plan.isNew ? plan.lastCol : col);
+      var style = Object.assign({}, base ? base.style : {});
+      if (isMissingFill(style.fill)) delete style.fill;
+      done[item.row] = true;
+      if (item.refRow) {
+        style.numFmt = item.numFmt || 'General';
+        cell.style = style;
+        cell.value = {
+          formula: prefix + valueLetter + item.refRow,
+          result: item.value === null || item.value === '' ? 0 : item.value
+        };
+      } else {
+        style.fill = MISSING_FILL;
+        cell.style = style;
+        cell.value = null;
+      }
+    });
+
+    // 重做時，把這一行裡不再對得到的舊內容清掉
+    if (!plan.isNew) {
+      eachStoredRow(main, function (row, r) {
+        if (r < o.dataStartRow || done[r]) return;
+        var old = row.findCell(col);
+        if (old) old.value = null;
+      });
+    }
+
+    if (plan.isNew) main.getColumn(col).width = 11;
+
+    // 請 Excel 開檔時重新計算一次公式
+    var wb = main.workbook;
+    if (wb) wb.calcProperties = Object.assign({}, wb.calcProperties, { fullCalcOnLoad: true });
+
+    return plan;
+  }
+
   function toBlob(workbook) {
     return workbook.xlsx.writeBuffer().then(function (buf) {
       return new Blob([buf], {
@@ -774,7 +1000,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 3,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 4,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,
@@ -791,6 +1017,12 @@
     extent: extent,
     filter: filter,
     copySheet: copySheet,
+    guessHeaderRow: guessHeaderRow,
+    columnLabels: columnLabels,
+    lookupKey: lookupKey,
+    buildIndex: buildIndex,
+    planLookup: planLookup,
+    addLookupColumn: addLookupColumn,
     toBlob: toBlob
   };
 
