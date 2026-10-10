@@ -50,6 +50,7 @@ h1, h2, p { margin: 0; }
 }
 .topbar .app-name { font-size: 1.125rem; font-weight: 700; letter-spacing: 0.02em; }
 .topbar .app-sub { font-size: 0.875rem; opacity: 0.8; }
+.topbar .app-version { margin-left: auto; font-size: 0.8125rem; opacity: 0.8; font-variant-numeric: tabular-nums; }
 
 .layout {
   display: grid;
@@ -247,6 +248,25 @@ button.step:hover { background: rgba(11, 110, 105, 0.07); }
 }
 .btn-primary:hover { background: var(--teal-ink); }
 .btn-primary:disabled { background: #AAB7B5; cursor: not-allowed; }
+.btn-secondary {
+  font: inherit; font-weight: 700; color: var(--teal-ink);
+  padding: calc(0.75rem - 1.5px) 1.5rem;
+  border: 1.5px solid var(--teal); border-radius: 2px;
+  background: var(--surface); cursor: pointer;
+}
+.btn-secondary:hover { background: #E3EEEC; }
+.btn-secondary:disabled { color: #8A999E; border-color: #AAB7B5; background: var(--surface); cursor: not-allowed; }
+.btn-link {
+  font: inherit; color: var(--teal-ink);
+  padding: 0.25rem 0; border: 0; background: none; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 0.2em;
+}
+.btn-link:hover { color: var(--ink); }
+.link-row { display: flex; gap: 1.25rem; flex-wrap: wrap; margin-top: 0.625rem; }
+.link-row:not(:has(> :not([hidden]))) { display: none; }
+
+/* 目前使用哪一個來源 */
+.source-line { max-width: 44rem; margin-bottom: 0.75rem; }
 .export-note { font-size: 0.9375rem; color: var(--ink-2); }
 
 /* ---------- 窄螢幕 ---------- */

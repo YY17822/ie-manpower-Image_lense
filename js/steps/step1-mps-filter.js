@@ -5,6 +5,8 @@
  *   3. 輸入要保留哪些行
  *   4. 匯出新的 Excel，第 1–4 列表頭（含合併儲存格）原樣保留
  *
+ * 做完之後把結果放在 IEApp.state.mpsFiltered，第 2 步直接拿來用。
+ *
  * 名詞：行 = 直的（A、B、C…），列 = 橫的（1、2、3…）。
  */
 (function (global) {
@@ -12,6 +14,7 @@
 
   var IEApp = global.IEApp;
   var XIO = global.ExcelIO;
+  var ui = IEApp.ui;
   var h = IEApp.h;
 
   var STORE_KEY = 'ie-manpower.step1';
@@ -52,15 +55,20 @@
       .map(function (v) { return v.trim(); })
       .filter(function (v) { return v !== ''; });
   }
+  function outputName() {
+    return S.fileName.replace(/\.[^.]+$/, '') + '_篩選.xlsx';
+  }
 
   /* ---------- 畫面 ---------- */
   function render(panel) {
     els = {};
 
-    els.fileInput = h('input', { type: 'file', accept: '.xlsx,.xlsm', class: 'visually-hidden', id: 'f-file' });
-    els.dropMain = h('span', { class: 'drop-main', text: '選擇 MPS 的 Excel 檔' });
-    els.dropSub = h('span', { class: 'drop-sub', text: '或把檔案拖進這裡。支援 .xlsx' });
-    els.drop = h('label', { class: 'drop', for: 'f-file' }, els.fileInput, els.dropMain, els.dropSub);
+    els.drop = ui.fileDrop({
+      id: 'f-file',
+      title: '選擇 MPS 的 Excel 檔',
+      sub: '或把檔案拖進這裡。支援 .xlsx',
+      onFile: openFile
+    });
     els.sheetSelect = h('select', { id: 'f-sheet', 'aria-label': '工作表' });
     els.sheetRow = h('div', { class: 'field-row', hidden: true },
       h('label', { for: 'f-sheet', text: '工作表' }), els.sheetSelect);
@@ -89,6 +97,10 @@
     els.summary = h('p', { class: 'summary', 'aria-live': 'polite' });
     els.outPreview = h('div', { class: 'sheet-area' });
     els.exportBtn = h('button', { type: 'button', class: 'btn-primary', disabled: true, text: '匯出 Excel', onclick: onExport });
+    els.nextBtn = h('button', {
+      type: 'button', class: 'btn-secondary', disabled: true, text: '下一步：匯入 P003',
+      onclick: function () { IEApp.go('p003-import'); }
+    });
     els.exportNote = h('span', { class: 'export-note', 'aria-live': 'polite' });
 
     panel.appendChild(h('div', { class: 'step-head' },
@@ -98,7 +110,7 @@
     panel.appendChild(h('ol', { class: 'tasks' },
       h('li', { class: 'task' },
         h('h2', { text: '上傳 MPS 報表' }),
-        els.drop, els.sheetRow, els.fileMsg),
+        els.drop.el, els.sheetRow, els.fileMsg),
       h('li', { class: 'task' },
         h('h2', { text: '選取條件' }),
         h('div', { class: 'field-row' },
@@ -120,23 +132,8 @@
       h('li', { class: 'task' },
         h('h2', { text: '匯出' }),
         els.summary, els.outPreview,
-        h('div', { class: 'actions' }, els.exportBtn, els.exportNote))));
+        h('div', { class: 'actions' }, els.exportBtn, els.nextBtn, els.exportNote))));
 
-    // 事件
-    els.fileInput.addEventListener('change', function () {
-      if (els.fileInput.files[0]) openFile(els.fileInput.files[0]);
-      els.fileInput.value = '';
-    });
-    ['dragenter', 'dragover'].forEach(function (ev) {
-      els.drop.addEventListener(ev, function (e) { e.preventDefault(); els.drop.classList.add('is-over'); });
-    });
-    ['dragleave', 'drop'].forEach(function (ev) {
-      els.drop.addEventListener(ev, function (e) { e.preventDefault(); els.drop.classList.remove('is-over'); });
-    });
-    els.drop.addEventListener('drop', function (e) {
-      var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-      if (f) openFile(f);
-    });
     els.sheetSelect.addEventListener('change', function () {
       pickSheet(parseInt(els.sheetSelect.value, 10));
     });
@@ -160,14 +157,10 @@
   /* ---------- 開檔 ---------- */
   function openFile(file) {
     els.fileMsg.hidden = true;
-    els.dropMain.textContent = '讀取中…';
-    els.dropSub.textContent = file.name;
-    file.arrayBuffer()
-      .then(function (buf) {
-        return IEApp.loadExcelJS().then(function () { return XIO.load(buf); });
-      })
-      .then(function (wb) {
-        S.workbook = wb;
+    els.drop.setBusy(file.name);
+    ui.readWorkbook(file)
+      .then(function (res) {
+        S.workbook = res.workbook;
         S.fileName = file.name;
         S.ws = null;
         showFile();
@@ -176,18 +169,12 @@
       .catch(function (err) {
         els.fileMsg.textContent = err && err.message ? err.message : String(err);
         els.fileMsg.hidden = false;
-        if (S.workbook) showFile();
-        else {
-          els.dropMain.textContent = '選擇 MPS 的 Excel 檔';
-          els.dropSub.textContent = '或把檔案拖進這裡。支援 .xlsx';
-        }
+        if (S.workbook) showFile(); else els.drop.setIdle();
       });
   }
 
   function showFile() {
-    els.drop.classList.add('has-file');
-    els.dropMain.textContent = S.fileName;
-    els.dropSub.textContent = '點這裡換一個檔案';
+    els.drop.setFile(S.fileName);
     var sheets = S.workbook.worksheets;
     els.sheetSelect.textContent = '';
     sheets.forEach(function (ws, i) {
@@ -209,7 +196,9 @@
   function recompute() {
     saveSettings();
     S.result = null;
+    IEApp.state.mpsFiltered = null;
     els.exportBtn.disabled = true;
+    els.nextBtn.disabled = true;
     els.selLabel.textContent = XIO.numToCol(selCol());
 
     if (!S.ws) {
@@ -236,10 +225,11 @@
     parsed.cols.forEach(function (c) { keep[c] = true; });
 
     renderChips(info, wanted);
-    renderSheet(els.srcPreview, S.ws, {
+    ui.renderSheet(els.srcPreview, S.ws, {
       headerEnd: sr - 1,
       lastRow: info.lastRow,
       colCount: Math.max(info.colCount, 1),
+      rows: PREVIEW_ROWS,
       keep: keep,
       onToggle: toggleColumn,
       selectorCol: sc,
@@ -262,9 +252,12 @@
     }
     if (!parsed.cols.length) { setSummary('輸入要保留的行。'); return; }
 
-    var result = XIO.filter(S.ws, {
+    // 這組條件存起來：匯出、以及第 2 步要重新產生活頁簿時都用同一組
+    var ws = S.ws;
+    var opts = {
       dataStartRow: sr, selectorCol: sc, values: values, keepCols: parsed.cols, lastRow: info.lastRow
-    });
+    };
+    var result = XIO.filter(ws, opts);
 
     if (!result.matchedRows) {
       var seen = info.values.slice(0, 8).map(function (v) { return v.label; }).join('、');
@@ -280,18 +273,24 @@
     if (beyond.length) text += ' 注意：' + XIO.formatColumns(beyond) + ' 行在報表裡沒有資料。';
     setSummary(text, false, beyond.length > 0);
 
-    renderSheet(els.outPreview, result.worksheet, {
+    ui.renderSheet(els.outPreview, result.worksheet, {
       headerEnd: result.headerEnd,
       lastRow: result.lastRow,
       colCount: result.colCount,
+      rows: PREVIEW_ROWS,
       caption: '匯出後的樣子（前 ' + PREVIEW_ROWS + ' 列資料）。'
     });
     els.exportBtn.disabled = false;
+    els.nextBtn.disabled = false;
 
-    // 給下一步用
+    // 給第 2 步用。build() 每次都產生一份全新的活頁簿，後面的步驟可以放心往裡面加工作表。
     IEApp.state.mpsFiltered = {
-      fileName: S.fileName, sheetName: S.ws.name, values: values,
-      keepCols: parsed.cols, headerEnd: result.headerEnd, worksheet: result.worksheet
+      sourceName: S.fileName,
+      outName: outputName(),
+      sheetName: result.worksheet.name,
+      matchedRows: result.matchedRows,
+      headerEnd: result.headerEnd,
+      build: function () { return XIO.filter(ws, opts).workbook; }
     };
   }
 
@@ -347,112 +346,17 @@
     if (btn) btn.focus({ preventScroll: true });
   }
 
-  /* ---------- 試算表預覽 ---------- */
-  /*
-   * o.headerEnd   表頭最後一列
-   * o.lastRow     最後一列資料
-   * o.colCount    要畫幾行
-   * o.keep        { 行號: true }，要標示的行（可省略）
-   * o.onToggle    點行號時呼叫（可省略；有給的話行號會變成按鈕）
-   * o.selectorCol / o.wanted  用來把不符合條件的列變淡（可省略）
-   */
-  function renderSheet(container, ws, o) {
-    container.textContent = '';
-    var lastShown = Math.min(o.lastRow, o.headerEnd + PREVIEW_ROWS);
-    var colCount = o.colCount;
-    var keep = o.keep || {};
-
-    // 合併儲存格 -> colspan / rowspan
-    var span = {};
-    var covered = {};
-    XIO.listMerges(ws).forEach(function (m) {
-      if (m.top > lastShown || m.left > colCount) return;
-      var bottom = Math.min(m.bottom, lastShown);
-      var right = Math.min(m.right, colCount);
-      span[m.top + ':' + m.left] = { rows: bottom - m.top + 1, cols: right - m.left + 1 };
-      for (var r = m.top; r <= bottom; r++) {
-        for (var c = m.left; c <= right; c++) {
-          if (r !== m.top || c !== m.left) covered[r + ':' + c] = true;
-        }
-      }
-    });
-
-    var headRow = h('tr', null, h('th', { class: 'corner', scope: 'col' }));
-    for (var c = 1; c <= colCount; c++) {
-      var letter = XIO.numToCol(c);
-      var on = !!keep[c];
-      var label = o.onToggle
-        ? h('button', {
-            type: 'button', 'data-col': String(c), 'aria-pressed': on ? 'true' : 'false',
-            title: (on ? '取消保留 ' : '保留 ') + letter + ' 行',
-            onclick: (function (col) { return function () { o.onToggle(col); }; })(c)
-          }, letter)
-        : letter;
-      headRow.appendChild(h('th', { class: 'colhead' + (on ? ' is-kept' : ''), scope: 'col' }, label));
-    }
-
-    var body = h('tbody');
-    for (var r = 1; r <= lastShown; r++) {
-      var row = ws.findRow(r);
-      var isHeader = r <= o.headerEnd;
-      var out = false;
-      if (!isHeader && o.wanted) {
-        var k = XIO.matchKey(valueOf(row && row.findCell(o.selectorCol)));
-        out = !(k !== '' && o.wanted[k]);
-      }
-      var tr = h('tr', { class: (isHeader ? 'is-header' : '') + (out ? ' is-out' : '') },
-        h('th', { class: 'rowhead', scope: 'row', text: String(r) }));
-      for (c = 1; c <= colCount; c++) {
-        if (covered[r + ':' + c]) continue;
-        var cell = row ? row.findCell(c) : null;
-        var sp = span[r + ':' + c];
-        // 合併儲存格：全部的行都保留才整格畫螢光，只保留一部分就用淡色
-        var width = sp ? sp.cols : 1;
-        var keptCount = 0;
-        for (var cc = c; cc < c + width; cc++) if (keep[cc]) keptCount++;
-        var raw = XIO.plainValue(valueOf(cell));
-        var cls = (keptCount === width ? 'is-kept' : keptCount ? 'is-part' : '') +
-          (typeof raw === 'number' ? ' is-num' : '') + (sp ? ' is-merged' : '') + (width > 6 ? ' is-wide' : '');
-        var td = h('td', { class: cls.trim() || null, text: cell ? XIO.displayText(cell) : '' });
-        if (sp && sp.cols > 1) td.colSpan = sp.cols;
-        if (sp && sp.rows > 1) td.rowSpan = sp.rows;
-        tr.appendChild(td);
-      }
-      body.appendChild(tr);
-    }
-
-    var more = o.lastRow - lastShown;
-    container.appendChild(h('p', { class: 'sheet-caption', text: o.caption + (more > 0 ? ' 還有 ' + more.toLocaleString('en-US') + ' 列沒顯示。' : '') }));
-    container.appendChild(h('div', { class: 'sheet-scroll', tabindex: '0', role: 'group', 'aria-label': '試算表預覽' },
-      h('table', { class: 'sheet' }, h('thead', null, headRow), body)));
-  }
-
-  function valueOf(cell) {
-    if (!cell) return null;
-    return cell.isMerged ? cell.master.value : cell.value;
-  }
-
   /* ---------- 匯出 ---------- */
   function onExport() {
-    if (!S.result || !S.ws) return;
-    var info = S.info;
-    var parsed = XIO.parseColumns(settings.cols);
+    var ready = IEApp.state.mpsFiltered;
+    if (!S.result || !ready) return;
+    var rows = ready.matchedRows;
+    var name = ready.outName;
     els.exportBtn.disabled = true;
     els.exportNote.textContent = '產生檔案中…';
-    // 重新產生一份乾淨的活頁簿再寫出
-    var fresh = XIO.filter(S.ws, {
-      dataStartRow: startRow(), selectorCol: selCol(), values: wantedValues(),
-      keepCols: parsed.cols, lastRow: info.lastRow
-    });
-    var name = S.fileName.replace(/\.[^.]+$/, '') + '_篩選.xlsx';
-    XIO.toBlob(fresh.workbook).then(function (blob) {
-      var url = URL.createObjectURL(blob);
-      var a = h('a', { href: url, download: name });
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
-      els.exportNote.textContent = '已匯出 ' + name + '（' + fresh.matchedRows.toLocaleString('en-US') + ' 列），在瀏覽器的下載資料夾。';
+    XIO.toBlob(ready.build()).then(function (blob) {
+      ui.download(blob, name);
+      els.exportNote.textContent = '已匯出 ' + name + '（' + rows.toLocaleString('en-US') + ' 列），在瀏覽器的下載資料夾。';
     }).catch(function (err) {
       els.exportNote.textContent = '匯出失敗：' + (err && err.message ? err.message : err);
     }).then(function () {

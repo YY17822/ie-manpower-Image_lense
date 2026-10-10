@@ -132,6 +132,285 @@
     return e;
   }
 
+  /*
+   * 讀檔前的修正：字型旗標。
+   *
+   * ExcelJS 4.x 讀字型設定時，只要看到 <b>、<i>、<strike> 這些標籤就當成「有」，
+   * 不管後面是不是寫著 val="0"（＝沒有）。SAP 這類系統匯出的報表會把「沒有粗體、
+   * 沒有刪除線」明寫成 <b val="0"/> <strike val="0"/>，結果整張表被讀成
+   * 粗體＋斜體＋刪除線，匯出後就全部被畫上橫線。
+   *
+   * 做法：.xlsx 其實是一個 zip 壓縮檔。交給 ExcelJS 之前，先把裡面的樣式檔
+   * （styles.xml）和文字檔（sharedStrings.xml）解開，拿掉這些「明寫為沒有」的標籤，
+   * 再包回去。解壓縮用下面自己寫的 inflateRaw()，不靠瀏覽器的功能，所以 Chrome、
+   * Edge、Safari 新舊版本的結果都一樣。任何一步不順利就原封不動交給 ExcelJS。
+   */
+  var OFF_FLAGS = /<(b|i|strike|outline|shadow|condense|extend)\s+val\s*=\s*(["'])(?:0|false)\2\s*(?:\/>|>\s*<\/\1>)/g;
+  var FIX_ENTRIES = { 'xl/styles.xml': true, 'xl/sharedStrings.xml': true };
+
+  /* 解開 zip 裡用 deflate 壓縮的資料。src：壓縮資料；size：解開後的大小。 */
+  var LEN_BASE = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+  var LEN_EXTRA = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
+  var DIST_BASE = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+  var DIST_EXTRA = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
+  var CODE_ORDER = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+
+  function huffman(lengths, start, n) {
+    var count = new Uint16Array(16);
+    var symbol = new Uint16Array(n);
+    var offs = new Uint16Array(16);
+    var i;
+    for (i = 0; i < n; i++) count[lengths[start + i]]++;
+    for (i = 1; i < 15; i++) offs[i + 1] = offs[i] + count[i];
+    for (i = 0; i < n; i++) {
+      var len = lengths[start + i];
+      if (len) symbol[offs[len]++] = i;
+    }
+    return { count: count, symbol: symbol };
+  }
+
+  function inflateRaw(src, size) {
+    var out = new Uint8Array(size);
+    var op = 0, ip = 0, bitBuf = 0, bitCnt = 0;
+
+    function bits(n) {
+      while (bitCnt < n) {
+        if (ip >= src.length) throw new Error('inflate: 資料不完整');
+        bitBuf |= src[ip++] << bitCnt;
+        bitCnt += 8;
+      }
+      var v = bitBuf & ((1 << n) - 1);
+      bitBuf >>>= n;
+      bitCnt -= n;
+      return v;
+    }
+    function decode(h) {
+      var code = 0, first = 0, index = 0;
+      for (var len = 1; len <= 15; len++) {
+        code |= bits(1);
+        var cnt = h.count[len];
+        if (code - cnt < first) return h.symbol[index + (code - first)];
+        index += cnt;
+        first = (first + cnt) << 1;
+        code <<= 1;
+      }
+      throw new Error('inflate: 編碼錯誤');
+    }
+    function block(lenCode, distCode) {
+      for (;;) {
+        var sym = decode(lenCode);
+        if (sym < 256) {
+          if (op >= size) throw new Error('inflate: 超出大小');
+          out[op++] = sym;
+        } else if (sym === 256) {
+          return;
+        } else {
+          sym -= 257;
+          if (sym >= 29) throw new Error('inflate: 長度錯誤');
+          var len = LEN_BASE[sym] + bits(LEN_EXTRA[sym]);
+          var ds = decode(distCode);
+          if (ds >= 30) throw new Error('inflate: 距離錯誤');
+          var dist = DIST_BASE[ds] + bits(DIST_EXTRA[ds]);
+          if (dist > op || op + len > size) throw new Error('inflate: 距離錯誤');
+          for (var k = 0; k < len; k++, op++) out[op] = out[op - dist];
+        }
+      }
+    }
+
+    var last, lengths, i;
+    do {
+      last = bits(1);
+      var type = bits(2);
+      if (type === 0) {                      // 沒壓縮的區塊
+        bitBuf = 0; bitCnt = 0;
+        if (ip + 4 > src.length) throw new Error('inflate: 資料不完整');
+        var n = src[ip] | (src[ip + 1] << 8);
+        ip += 4;
+        if (ip + n > src.length || op + n > size) throw new Error('inflate: 資料不完整');
+        out.set(src.subarray(ip, ip + n), op);
+        ip += n; op += n;
+      } else if (type === 1) {               // 固定編碼
+        lengths = new Uint8Array(288 + 30);
+        for (i = 0; i < 144; i++) lengths[i] = 8;
+        for (; i < 256; i++) lengths[i] = 9;
+        for (; i < 280; i++) lengths[i] = 7;
+        for (; i < 288; i++) lengths[i] = 8;
+        for (; i < 318; i++) lengths[i] = 5;
+        block(huffman(lengths, 0, 288), huffman(lengths, 288, 30));
+      } else if (type === 2) {               // 動態編碼
+        var nlen = bits(5) + 257, ndist = bits(5) + 1, ncode = bits(4) + 4;
+        if (nlen > 286 || ndist > 30) throw new Error('inflate: 編碼表錯誤');
+        lengths = new Uint8Array(320);
+        for (i = 0; i < ncode; i++) lengths[CODE_ORDER[i]] = bits(3);
+        var codeLen = huffman(lengths, 0, 19);
+        lengths = new Uint8Array(320);
+        i = 0;
+        while (i < nlen + ndist) {
+          var sym = decode(codeLen);
+          if (sym < 16) {
+            lengths[i++] = sym;
+          } else {
+            var prev = 0, rep;
+            if (sym === 16) {
+              if (i === 0) throw new Error('inflate: 編碼表錯誤');
+              prev = lengths[i - 1];
+              rep = 3 + bits(2);
+            } else if (sym === 17) {
+              rep = 3 + bits(3);
+            } else {
+              rep = 11 + bits(7);
+            }
+            if (i + rep > nlen + ndist) throw new Error('inflate: 編碼表錯誤');
+            while (rep--) lengths[i++] = prev;
+          }
+        }
+        block(huffman(lengths, 0, nlen), huffman(lengths, nlen, ndist));
+      } else {
+        throw new Error('inflate: 區塊類型錯誤');
+      }
+    } while (!last);
+    if (op !== size) throw new Error('inflate: 大小不符');
+    return out;
+  }
+
+  var crcTable = null;
+  function crc32(bytes) {
+    if (!crcTable) {
+      crcTable = new Uint32Array(256);
+      for (var n = 0; n < 256; n++) {
+        var c = n;
+        for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        crcTable[n] = c >>> 0;
+      }
+    }
+    var crc = 0xFFFFFFFF;
+    for (var i = 0; i < bytes.length; i++) crc = crcTable[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  // 讀出 zip 裡每個檔案的資訊與（仍是壓縮狀態的）內容。看不懂的格式回傳 null。
+  function readZip(buffer) {
+    var dv = new DataView(buffer);
+    var size = buffer.byteLength;
+    var eocd = -1;
+    for (var i = size - 22; i >= 0 && i >= size - 22 - 65535; i--) {
+      if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) return null;
+    var count = dv.getUint16(eocd + 10, true);
+    var p = dv.getUint32(eocd + 16, true);
+    if (count === 0xFFFF || p === 0xFFFFFFFF) return null;       // zip64，不處理
+    var decoder = new TextDecoder();
+    var entries = [];
+    for (var k = 0; k < count; k++) {
+      if (dv.getUint32(p, true) !== 0x02014b50) return null;
+      var e = {
+        flags: dv.getUint16(p + 8, true),
+        method: dv.getUint16(p + 10, true),
+        time: dv.getUint16(p + 12, true),
+        date: dv.getUint16(p + 14, true),
+        crc: dv.getUint32(p + 16, true),
+        csize: dv.getUint32(p + 20, true),
+        usize: dv.getUint32(p + 24, true),
+        intAttr: dv.getUint16(p + 36, true),
+        extAttr: dv.getUint32(p + 38, true)
+      };
+      var nameLen = dv.getUint16(p + 28, true);
+      var extraLen = dv.getUint16(p + 30, true);
+      var commentLen = dv.getUint16(p + 32, true);
+      var local = dv.getUint32(p + 42, true);
+      if (e.flags & 1) return null;                              // 有加密，不處理
+      if (e.csize === 0xFFFFFFFF || e.usize === 0xFFFFFFFF || local === 0xFFFFFFFF) return null;
+      e.nameBytes = new Uint8Array(buffer, p + 46, nameLen);
+      e.name = decoder.decode(e.nameBytes);
+      if (dv.getUint32(local, true) !== 0x04034b50) return null;
+      var dataStart = local + 30 + dv.getUint16(local + 26, true) + dv.getUint16(local + 28, true);
+      if (dataStart + e.csize > size) return null;
+      e.data = new Uint8Array(buffer, dataStart, e.csize);
+      entries.push(e);
+      p += 46 + nameLen + extraLen + commentLen;
+    }
+    return entries;
+  }
+
+  // 把檔案清單重新包成 zip
+  function writeZip(entries) {
+    var total = 22;
+    entries.forEach(function (e) { total += 30 + 46 + 2 * e.nameBytes.length + e.data.length; });
+    var out = new Uint8Array(total);
+    var dv = new DataView(out.buffer);
+    var p = 0;
+    entries.forEach(function (e) {
+      e.offset = p;
+      e.outFlags = e.flags & (e.method === 8 ? 0x0806 : 0x0800);  // 留下壓縮等級與 UTF-8 檔名旗標
+      dv.setUint32(p, 0x04034b50, true);
+      dv.setUint16(p + 4, 20, true);
+      dv.setUint16(p + 6, e.outFlags, true);
+      dv.setUint16(p + 8, e.method, true);
+      dv.setUint16(p + 10, e.time, true);
+      dv.setUint16(p + 12, e.date, true);
+      dv.setUint32(p + 14, e.crc, true);
+      dv.setUint32(p + 18, e.data.length, true);
+      dv.setUint32(p + 22, e.usize, true);
+      dv.setUint16(p + 26, e.nameBytes.length, true);
+      out.set(e.nameBytes, p + 30);
+      out.set(e.data, p + 30 + e.nameBytes.length);
+      p += 30 + e.nameBytes.length + e.data.length;
+    });
+    var cdStart = p;
+    entries.forEach(function (e) {
+      dv.setUint32(p, 0x02014b50, true);
+      dv.setUint16(p + 4, 20, true);
+      dv.setUint16(p + 6, 20, true);
+      dv.setUint16(p + 8, e.outFlags, true);
+      dv.setUint16(p + 10, e.method, true);
+      dv.setUint16(p + 12, e.time, true);
+      dv.setUint16(p + 14, e.date, true);
+      dv.setUint32(p + 16, e.crc, true);
+      dv.setUint32(p + 20, e.data.length, true);
+      dv.setUint32(p + 24, e.usize, true);
+      dv.setUint16(p + 28, e.nameBytes.length, true);
+      dv.setUint16(p + 36, e.intAttr, true);
+      dv.setUint32(p + 38, e.extAttr, true);
+      dv.setUint32(p + 42, e.offset, true);
+      out.set(e.nameBytes, p + 46);
+      p += 46 + e.nameBytes.length;
+    });
+    dv.setUint32(p, 0x06054b50, true);
+    dv.setUint16(p + 8, entries.length, true);
+    dv.setUint16(p + 10, entries.length, true);
+    dv.setUint32(p + 12, p - cdStart, true);
+    dv.setUint32(p + 16, cdStart, true);
+    return out.buffer;
+  }
+
+  // 回傳修正過的檔案內容（ArrayBuffer）；不需要修或修不了就回傳原本的
+  function fixFontFlags(buffer) {
+    try {
+      var entries = readZip(buffer);
+      if (!entries) return buffer;
+      var changed = false;
+      entries.forEach(function (e) {
+        if (!FIX_ENTRIES[e.name] || (e.method !== 8 && e.method !== 0)) return;
+        var bytes = e.method === 8 ? inflateRaw(e.data, e.usize) : e.data;
+        if (crc32(bytes) !== e.crc) return;                       // 解出來的內容不對，不處理
+        if (bytes[0] === 0xFF || bytes[0] === 0xFE) return;       // 不是 UTF-8，不處理
+        var text = new TextDecoder('utf-8').decode(bytes);
+        var fixed = text.replace(OFF_FLAGS, '');
+        if (fixed === text) return;
+        var plain = new TextEncoder().encode(fixed);
+        e.data = plain;                                           // 改過的檔案不壓縮，直接存
+        e.method = 0;
+        e.crc = crc32(plain);
+        e.usize = plain.length;
+        changed = true;
+      });
+      return changed ? writeZip(entries) : buffer;
+    } catch (err) {
+      return buffer;
+    }
+  }
+
   function load(arrayBuffer) {
     var head = new Uint8Array(arrayBuffer.slice(0, 4));
     if (head[0] === 0xD0 && head[1] === 0xCF) {
@@ -140,13 +419,14 @@
     }
     if (!(head[0] === 0x50 && head[1] === 0x4B)) {
       return Promise.reject(ioError('NOT_XLSX',
-        '這不是 Excel 活頁簿（.xlsx）。請確認上傳的是 MPS 報表的 .xlsx 檔。'));
+        '這不是 Excel 活頁簿（.xlsx）。請確認上傳的是 .xlsx 檔。'));
     }
     var wb = new global.ExcelJS.Workbook();
-    return wb.xlsx.load(arrayBuffer).then(function () {
+    return wb.xlsx.load(fixFontFlags(arrayBuffer)).then(function () {
       if (!wb.worksheets.length) throw ioError('NO_SHEET', '這個活頁簿裡沒有工作表。');
       return wb;
     }, function (err) {
+      if (err && err.code) throw err;
       throw ioError('READ_FAIL', '讀不了這個 Excel 檔：' + (err && err.message ? err.message : err));
     });
   }
@@ -212,6 +492,43 @@
       values: order.map(function (k) { return counts[k]; }),
       blankCount: dataRows - nonBlank
     };
+  }
+
+  /* ---------- 工作表的範圍 ---------- */
+
+  // 逐列、逐格走訪「實際存在」的列與儲存格（包含只有格式、沒有值的格子）
+  function eachStoredRow(ws, fn) {
+    var rows = ws._rows;
+    if (Array.isArray(rows)) {
+      for (var i = 0; i < rows.length; i++) if (rows[i]) fn(rows[i], i + 1);
+    } else {
+      ws.eachRow({ includeEmpty: false }, fn);
+    }
+  }
+  function eachStoredCell(row, fn) {
+    var cells = row._cells;
+    if (Array.isArray(cells)) {
+      for (var i = 0; i < cells.length; i++) if (cells[i]) fn(cells[i], i + 1);
+    } else {
+      row.eachCell({ includeEmpty: false }, fn);
+    }
+  }
+
+  // 回傳 { lastRow, colCount }：最後一列、最右一行「有值」的位置
+  function extent(ws) {
+    var lastRow = 0;
+    var colCount = 0;
+    eachStoredRow(ws, function (row, r) {
+      var has = false;
+      eachStoredCell(row, function (cell, c) {
+        var v = cellRawValue(cell);
+        if (v === null || v === undefined || v === '') return;
+        has = true;
+        if (c > colCount) colCount = c;
+      });
+      if (has && r > lastRow) lastRow = r;
+    });
+    return { lastRow: lastRow, colCount: colCount };
   }
 
   /* ---------- 篩選並產生新的活頁簿 ---------- */
@@ -370,6 +687,84 @@
     };
   }
 
+  /* ---------- 把整張工作表複製到另一個活頁簿 ---------- */
+
+  /*
+   * 把 src 工作表原樣複製進 dstWorkbook，取名為 name。
+   * 值、格式、合併儲存格、行寬、列高、隱藏的行列、凍結窗格、自動篩選都會帶過去；
+   * 公式換成計算結果（跨檔案之後原公式的參照會失效）。
+   * dstWorkbook 裡如果已經有同名的工作表，會先移除再放新的。
+   * 回傳 { worksheet, lastRow, colCount }
+   */
+  function copySheet(src, dstWorkbook, name) {
+    // Excel 的工作表名稱不分大小寫，p003 和 P003 算同名
+    dstWorkbook.worksheets
+      .filter(function (w) { return String(w.name).toLowerCase() === String(name).toLowerCase(); })
+      .forEach(function (w) { dstWorkbook.removeWorksheet(w.id); });
+
+    var props = src.properties || {};
+    var ws = dstWorkbook.addWorksheet(name, {
+      properties: cleanObject({
+        defaultRowHeight: props.defaultRowHeight,
+        defaultColWidth: props.defaultColWidth
+      })
+    });
+
+    var ext = extent(src);
+    var maxCol = ext.colCount;
+
+    eachStoredRow(src, function (row, r) {
+      var nrow = null;
+      eachStoredCell(row, function (cell, c) {
+        if (!nrow) nrow = ws.getRow(r);
+        var ncell = nrow.getCell(c);
+        ncell.style = cell.style;
+        if (c > maxCol) maxCol = c;
+        if (cell.isMerged && cell.master !== cell) return;
+        var v = exportValue(cell);
+        if (v !== null && v !== '') ncell.value = v;
+      });
+      if (row.height || row.hidden) {
+        if (!nrow) nrow = ws.getRow(r);
+        if (row.height) nrow.height = row.height;
+        if (row.hidden) nrow.hidden = true;
+      }
+    });
+
+    for (var c = 1; c <= maxCol; c++) {
+      var col = src.getColumn(c);
+      if (col.width) ws.getColumn(c).width = col.width;
+      if (col.hidden) ws.getColumn(c).hidden = true;
+    }
+
+    listMerges(src).forEach(function (m) {
+      ws.mergeCellsWithoutStyle(m.top, m.left, m.bottom, m.right);
+    });
+
+    var v = (src.views && src.views[0]) || {};
+    var view = cleanObject({ showGridLines: v.showGridLines, zoomScale: v.zoomScale });
+    if (v.state === 'frozen') {
+      view.state = 'frozen';
+      view.xSplit = v.xSplit || 0;
+      view.ySplit = v.ySplit || 0;
+    }
+    if (Object.keys(view).length) ws.views = [view];
+
+    if (src.autoFilter) ws.autoFilter = src.autoFilter;
+
+    var ps = src.pageSetup || {};
+    Object.assign(ws.pageSetup, cleanObject({
+      orientation: ps.orientation,
+      paperSize: ps.paperSize,
+      fitToPage: ps.fitToPage,
+      fitToWidth: ps.fitToWidth,
+      fitToHeight: ps.fitToHeight,
+      printTitlesRow: ps.printTitlesRow
+    }));
+
+    return { worksheet: ws, lastRow: ext.lastRow, colCount: ext.colCount };
+  }
+
   function toBlob(workbook) {
     return workbook.xlsx.writeBuffer().then(function (buf) {
       return new Blob([buf], {
@@ -379,6 +774,7 @@
   }
 
   var ExcelIO = {
+    VERSION: 3,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,
@@ -388,9 +784,13 @@
     matchKey: matchKey,
     displayText: displayText,
     load: load,
+    fixFontFlags: fixFontFlags,
+    inflateRaw: inflateRaw,
     listMerges: listMerges,
     inspect: inspect,
+    extent: extent,
     filter: filter,
+    copySheet: copySheet,
     toBlob: toBlob
   };
 

@@ -1,10 +1,11 @@
 /*
  * sw.js — 離線快取。
- * 自己的檔案：有網路時抓最新的並更新快取，沒網路時用快取（所以改了程式重新整理就會生效）。
+ * 自己的檔案：有網路時一定向伺服器確認有沒有新版，並更新快取；沒網路時用快取。
+ *             （所以改了程式重新整理就會生效）
  * ExcelJS（網路版）：抓過一次就一直用快取。
  * 每次新增檔案時，把檔名加進 SHELL，並把 CACHE 的版本號加 1。
  */
-var CACHE = 'ie-manpower-v1';
+var CACHE = 'ie-manpower-v3';
 var EXCELJS_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
 var SHELL = [
   './',
@@ -13,7 +14,9 @@ var SHELL = [
   'css/style.css',
   'js/excel-io.js',
   'js/app.js',
+  'js/ui.js',
   'js/steps/step1-mps-filter.js',
+  'js/steps/step2-p003-import.js',
   'icons/icon-192.png',
   'icons/icon-512.png',
   'icons/icon-maskable-512.png'
@@ -59,8 +62,10 @@ self.addEventListener('fetch', function (event) {
 
   if (url.origin !== self.location.origin) return;
 
+  // cache: 'no-cache' = 不直接用瀏覽器自己留的舊檔，先問伺服器有沒有更新
+  var fresh = req.mode === 'navigate' ? fetch(req) : fetch(req.url, { cache: 'no-cache' });
   event.respondWith(
-    fetch(req).then(function (res) {
+    fresh.then(function (res) {
       if (res.ok) { var copy = res.clone(); caches.open(CACHE).then(function (c) { c.put(req, copy); }); }
       return res;
     }).catch(function () {

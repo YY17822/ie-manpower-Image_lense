@@ -11,8 +11,8 @@
   // 整個流程的步驟。還沒開發的步驟先列出來，做到時再補上對應的檔案。
   var STEPS = [
     { id: 'mps-filter', title: '篩選 MPS 報表', note: '挑出要算的料號與月份' },
-    { id: 'order-summary', title: '訂單彙總', note: '各型號每月總量、前三大' },
-    { id: 'std-hours', title: '標準工時', note: '比對工時、算總需求工時' },
+    { id: 'p003-import', title: '匯入 P003 標準工時', note: '加到同一個檔案' },
+    { id: 'order-hours', title: '訂單彙總與工時', note: '各型號每月總量、比對標準工時' },
     { id: 'headcount', title: '現有人力', note: '在職人數與出勤' },
     { id: 'report', title: '人力需求報表', note: '加班、效率損失、良率' }
   ];
@@ -109,6 +109,8 @@
   function registerStep(step) { registry[step.id] = step; }
 
   function start() {
+    var ver = document.getElementById('app-version');
+    if (ver) ver.textContent = '版本 ' + ((global.ExcelIO && global.ExcelIO.VERSION) || '?');
     var first = STEPS.filter(function (s) { return registry[s.id]; })[0];
     renderStepList();
     if (first) go(first.id);
