@@ -1242,6 +1242,7 @@
   /* ---------- 彙總：每月總需求工時、前三大、其他 ---------- */
 
   var TOP_FILL_ARGB = 'FFFFD8A8';     // 淺橘色
+  var HEAD_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFA2D2FF' } };   // 淺藍色（#A2D2FF）：Production、RMA 這兩列的底色
   var LABEL_WIDTH = 26;               // 文字標籤那一行至少要多寬，才放得下「Production 總需求工時」
 
   // 料號那一行最後一列有內容的列號（彙總列在它下面，不算資料）
@@ -1329,7 +1330,7 @@
    *   Others 總需求工時       =N76-N77          （Production − Top 3）
    *
    * 外觀：文字標籤放在需求工時左邊那一行、置中；標籤加上各月共七行、三列圍成一塊，
-   *       外框粗線、裡面細格線。
+   *       外框粗線、裡面細格線。Production 那一列整列是淺藍色底（#A2D2FF）。
    *
    * 每個月前三大的儲存格用「條件式格式」標上淺橘色：數值改了，標示會跟著變。
    * 規則是「大於 0，而且不小於該月第三大的數值」，所以 0 不會被標示。
@@ -1384,6 +1385,7 @@
         var cell = main.getCell(r, m.col);
         var style = { numFmt: INTEGER_FORMAT, border: boxBorder(r, m.col), alignment: { vertical: 'middle' } };
         if (font) style.font = font;
+        if (i === 0) style.fill = HEAD_FILL;                   // Production 那一列
         cell.style = style;
         cell.value = { formula: formulas[i], result: results[i] };
       });
@@ -1395,6 +1397,7 @@
         var cell = main.getCell(r, plan.labelCol);
         var style = { border: boxBorder(r, plan.labelCol), alignment: { horizontal: 'center', vertical: 'middle' } };
         if (font) style.font = font;
+        if (i === 0) style.fill = HEAD_FILL;
         cell.style = style;
         cell.value = texts[i];
       });
@@ -1475,6 +1478,7 @@
    * 項目名稱左邊那一格放 CT.（數字），第一列的同一個位置寫「CT.」當作標題。
    * 數量是使用者在畫面上輸入的，直接寫在公式裡；之後在 Excel 改 CT. 那一格，工時會跟著變。
    * 外觀和彙總那一塊一樣：外框粗線、裡面細格線；第一列的標籤置中，項目名稱靠左。
+   * 第一列（RMA總需求工時）整列是淺藍色底（#A2D2FF），左邊的「CT.」標題不上色。
    *
    * o.items  = [{ name, ct, qty: [各月數量] }]
    * o.labels = { title: 'RMA總需求工時', ct: 'CT.' }
@@ -1515,7 +1519,7 @@
 
     // 第一列：標籤、CT. 標題、各月合計
     var titleCell = main.getCell(top, plan.labelCol);
-    titleCell.style = styled({ border: boxBorder(top, plan.labelCol), alignment: { horizontal: 'center', vertical: 'middle' } });
+    titleCell.style = styled({ border: boxBorder(top, plan.labelCol), alignment: { horizontal: 'center', vertical: 'middle' }, fill: HEAD_FILL });
     titleCell.value = o.labels.title;
     if (plan.ctCol) {
       var ctHead = main.getCell(top, plan.ctCol);
@@ -1529,7 +1533,7 @@
       var total = 0;
       items.forEach(function (it) { total += (it.qty[i] || 0) * it.ct; });
       var sumCell = main.getCell(top, c);
-      sumCell.style = styled({ numFmt: INTEGER_FORMAT, border: boxBorder(top, c), alignment: { vertical: 'middle' } });
+      sumCell.style = styled({ numFmt: INTEGER_FORMAT, border: boxBorder(top, c), alignment: { vertical: 'middle' }, fill: HEAD_FILL });
       sumCell.value = items.length
         ? { formula: 'SUM(' + L + first + ':' + L + last + ')', result: total }
         : 0;
@@ -1576,7 +1580,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 9,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 10,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,
