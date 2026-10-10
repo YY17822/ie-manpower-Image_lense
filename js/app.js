@@ -13,7 +13,8 @@
     { id: 'mps-filter', title: '篩選 MPS 報表', note: '挑出要算的料號與月份' },
     { id: 'p003-import', title: '匯入 P003 標準工時', note: '加到同一個檔案' },
     { id: 'ct-lookup', title: '帶入標準工時 CT.', note: '用料號到 P003 查工時' },
-    { id: 'order-hours', title: '訂單彙總與總工時', note: '各型號每月總量、前三大' },
+    { id: 'demand-hours', title: '計算需求工時', note: '各月產量 × CT.' },
+    { id: 'summary', title: '彙總', note: '每月總工時、前三大型號' },
     { id: 'headcount', title: '現有人力', note: '在職人數與出勤' },
     { id: 'report', title: '人力需求報表', note: '加班、效率損失、良率' }
   ];

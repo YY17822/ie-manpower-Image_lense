@@ -77,7 +77,15 @@
   // 合併儲存格裡不是左上角的格子，值要去找左上角那一格
   function cellRawValue(cell) {
     if (!cell) return null;
-    return cell.isMerged ? cell.master.value : cell.value;
+    var src = cell.isMerged ? cell.master : cell;
+    var v = src.value;
+    // ExcelJS 的 value 會把「計算結果剛好是 0」的公式結果丟掉（變成沒有結果），用 result 補回來
+    if (v && typeof v === 'object' && !(v instanceof Date) && v.result === undefined &&
+        (v.formula !== undefined || v.sharedFormula !== undefined)) {
+      var res = src.result;
+      if (res !== undefined && res !== null) v = Object.assign({}, v, { result: res });
+    }
+    return v;
   }
 
   // 比對用的鍵：1、"1"、"１"、"1.0" 都視為相同
@@ -1041,6 +1049,222 @@
     return plan;
   }
 
+  /* ---------- 需求工時：各月數量 × CT. ---------- */
+
+  var MONTH_NAME = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i;
+
+  /*
+   * 找出某一行的「月份」表頭文字。
+   * MPS 的表頭有好幾層（有的跨欄、有的佔兩三格），做法是把這一行在表頭列裡的文字都拿出來，
+   * 只留「含英文字、而且不是 MPS（大小寫不分）」的；大標題那一列（第 1 列）不看。
+   * 有好幾個符合時，優先取看起來像月份的（Jan、Feb…），其次取純英文字的，再其次取最下面那一個。
+   * 都找不到就回傳空字串。
+   */
+  function monthLabel(ws, col, headerEnd) {
+    var texts = [];
+    for (var r = headerEnd >= 2 ? 2 : 1; r <= headerEnd; r++) {
+      var row = ws.findRow(r);
+      var cell = row ? row.findCell(col) : null;
+      var t = cell ? normalizeText(displayText(cell)).replace(/\s+/g, ' ') : '';
+      if (!t || texts.indexOf(t) >= 0) continue;
+      if (!/[A-Za-z]/.test(t) || t.toUpperCase() === 'MPS') continue;
+      texts.push(t);
+    }
+    if (!texts.length) return '';
+    var month = texts.filter(function (t) { return MONTH_NAME.test(t); });
+    if (month.length) return month[month.length - 1];
+    var pure = texts.filter(function (t) { return /^[A-Za-z.' -]+$/.test(t); });
+    if (pure.length) return pure[pure.length - 1];
+    return texts[texts.length - 1];
+  }
+
+  // 儲存格的值當成數字用；公式結果是錯誤（#DIV/0! 等）時回傳 { error }
+  function numberOrError(cell) {
+    var raw = cellRawValue(cell);
+    if (raw && typeof raw === 'object' && !(raw instanceof Date)) {
+      var res = raw.result !== undefined ? raw.result : raw;
+      if (res && typeof res === 'object' && res.error) return { error: res.error };
+      if (raw.error) return { error: raw.error };
+    }
+    var n = toNumber(raw);
+    if (n !== null && isNaN(n)) return { error: '#VALUE!' };
+    // blank：這一格真的什麼都沒有（公式不算空白，就算它還沒有計算結果）
+    var empty = raw === null || raw === undefined || raw === '';
+    return { value: n === null ? 0 : n, blank: empty };
+  }
+
+  // 找出已經存在的區塊（表頭文字是 title 的那一格）：回傳 { col, width }，沒有就回傳 null
+  function findBlock(ws, headerEnd, title) {
+    var col = findHeaderColumn(ws, headerEnd, title);
+    if (!col) return null;
+    var width = 1;
+    listMerges(ws).forEach(function (m) {
+      if (m.left === col && m.top <= headerEnd && m.right > m.left) {
+        var cell = ws.findCell(m.top, m.left);
+        if (cell && lookupKey(cell.value) === lookupKey(title)) width = m.right - m.left + 1;
+      }
+    });
+    return { col: col, width: width };
+  }
+
+  /*
+   * 先算出需求工時，不動工作表（給畫面預覽、統計用）。
+   *
+   * o.dataStartRow  資料從第幾列開始
+   * o.keyCol        料號在哪一行（只拿來顯示）
+   * o.wipCol        當月 WIP 在哪一行
+   * o.monthCols     各月數量在哪幾行（陣列，第一個是當月）
+   * o.ctCol         CT. 在哪一行
+   * o.title         大表頭文字，例如 '需求工時'
+   * o.headers       （可省略）各月的小表頭文字；沒給就用 monthLabel() 從 MPS 的表頭找
+   *
+   * 公式：當月 =(WIP+當月數量)*CT.，其餘各月 =數量*CT.
+   *
+   * 回傳：
+   *   startCol    要填入的第一行（原本最後一行之後空一行；已經有同名大表頭就用原本的位置）
+   *   isNew       是不是新增
+   *   headers     各月的小表頭文字
+   *   rows        [{ row, label, ct, noCt, values: [數字或 { error }], formulas: [...] }]
+   *   noCt        沒有 CT. 的列數（CT. 是空白）
+   *   errors      算不出來的列數（CT. 或數量是錯誤值、不是數字）
+   */
+  function planDemand(main, o) {
+    var headerEnd = o.dataStartRow - 1;
+    var ext = extent(main);
+    var old = findBlock(main, headerEnd, o.title);
+    var startCol = old ? old.col : ext.colCount + 2;
+    var lastRow = ext.lastRow;
+
+    var headers = o.monthCols.map(function (c, i) {
+      var given = o.headers && o.headers[i] !== undefined ? normalizeText(o.headers[i]) : '';
+      return given || monthLabel(main, c, headerEnd);
+    });
+
+    var ctL = numToCol(o.ctCol), wipL = numToCol(o.wipCol);
+    var rows = [];
+    var noCt = 0, errors = 0;
+    for (var r = o.dataStartRow; r <= lastRow; r++) {
+      var row = main.findRow(r);
+      if (!row) continue;
+      var keyCell = row.findCell(o.keyCol);
+      var label = keyCell ? displayText(keyCell) : '';
+      if (normalizeText(label) === '') continue;
+      var ct = numberOrError(row.findCell(o.ctCol));
+      var wip = numberOrError(row.findCell(o.wipCol));
+      var item = { row: r, label: label, ct: ct.error ? ct.error : ct.value, noCt: !!ct.blank, values: [], formulas: [] };
+      var bad = false;
+      o.monthCols.forEach(function (c, i) {
+        var qty = numberOrError(row.findCell(c));
+        var qL = numToCol(c);
+        var err = ct.error || qty.error || (i === 0 ? wip.error : null);
+        if (i === 0) {
+          item.formulas.push('(' + wipL + r + '+' + qL + r + ')*' + ctL + r);
+          item.values.push(err ? { error: err } : (wip.value + qty.value) * ct.value);
+        } else {
+          item.formulas.push(qL + r + '*' + ctL + r);
+          item.values.push(err ? { error: err } : qty.value * ct.value);
+        }
+        if (err) bad = true;
+      });
+      if (item.noCt) noCt++;
+      if (bad) errors++;
+      rows.push(item);
+    }
+
+    return {
+      startCol: startCol,
+      isNew: !old,
+      oldWidth: old ? old.width : 0,
+      headers: headers,
+      rows: rows,
+      noCt: noCt,
+      errors: errors
+    };
+  }
+
+  function centered(style) {
+    return Object.assign({}, style, {
+      alignment: Object.assign({}, style && style.alignment, { horizontal: 'center', vertical: 'middle' })
+    });
+  }
+
+  /*
+   * 把需求工時寫進工作表。參數和 planDemand 一樣，回傳的也是同一份結果。
+   *
+   * 表頭：大表頭（o.title）放在第 2 列、跨所有月份置中；
+   *       各月的小表頭放在第 3 列到表頭最後一列，每一行各自上下合併、置中。
+   * 資料：每格都是公式，點儲存格看得到是哪幾格相乘。沒有 CT. 的列一樣寫公式（結果是 0），
+   *       並標上和 CT. 一樣的淺紅色底，方便辨認。
+   */
+  function addDemandColumns(main, o) {
+    var plan = planDemand(main, o);
+    var headerEnd = o.dataStartRow - 1;
+    var n = o.monthCols.length;
+    var start = plan.startCol;
+    var end = start + n - 1;
+    var c, r;
+
+    // 重做時，先把原本那一塊清掉（表頭的合併、內容、樣式）
+    if (!plan.isNew) {
+      var oldEnd = start + Math.max(plan.oldWidth, n) - 1;
+      listMerges(main).forEach(function (m) {
+        if (m.left >= start && m.right <= oldEnd) main.unMergeCells(m.top, m.left, m.bottom, m.right);
+      });
+      eachStoredRow(main, function (row) {
+        for (var cc = start; cc <= oldEnd; cc++) {
+          var cell = row.findCell(cc);
+          if (cell) { cell.value = null; cell.style = {}; }
+        }
+      });
+    }
+
+    // 表頭的位置
+    var titleRow = headerEnd >= 3 ? 2 : (headerEnd === 2 ? 1 : 0);
+    var subTop = headerEnd >= 3 ? 3 : headerEnd;       // 小表頭從第幾列開始（到 headerEnd）
+
+    // 小表頭：樣式照抄該月數量那一行的表頭
+    if (headerEnd >= 1) {
+      for (var i = 0; i < n; i++) {
+        c = start + i;
+        for (r = subTop; r <= headerEnd; r++) {
+          var srcHead = main.findCell(r, o.monthCols[i]);
+          main.getCell(r, c).style = centered(srcHead ? srcHead.style : {});
+        }
+        main.getCell(subTop, c).value = plan.headers[i];
+        if (headerEnd > subTop) main.mergeCellsWithoutStyle(subTop, c, headerEnd, c);
+      }
+    }
+    // 大表頭：跨所有月份置中
+    if (titleRow) {
+      for (c = start; c <= end; c++) {
+        var srcTitle = main.findCell(titleRow, o.monthCols[c - start]);
+        main.getCell(titleRow, c).style = centered(srcTitle ? srcTitle.style : {});
+      }
+      main.getCell(titleRow, start).value = o.title;
+      if (end > start) main.mergeCellsWithoutStyle(titleRow, start, titleRow, end);
+    }
+
+    // 資料
+    plan.rows.forEach(function (item) {
+      for (var i = 0; i < n; i++) {
+        var cell = main.getCell(item.row, start + i);
+        var base = main.findCell(item.row, o.monthCols[i]);
+        var style = Object.assign({}, base ? base.style : {});
+        style.numFmt = '#,##0.00';
+        if (item.noCt) style.fill = MISSING_FILL;
+        cell.style = style;
+        cell.value = { formula: item.formulas[i], result: item.values[i] };
+      }
+    });
+
+    for (c = start; c <= end; c++) main.getColumn(c).width = 12;
+
+    var wb = main.workbook;
+    if (wb) wb.calcProperties = Object.assign({}, wb.calcProperties, { fullCalcOnLoad: true });
+
+    return plan;
+  }
+
   function toBlob(workbook) {
     return workbook.xlsx.writeBuffer().then(function (buf) {
       return new Blob([buf], {
@@ -1050,7 +1274,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 5,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 6,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,
@@ -1074,6 +1298,10 @@
     planLookup: planLookup,
     lookupFormula: lookupFormula,
     addLookupColumn: addLookupColumn,
+    findHeaderColumn: findHeaderColumn,
+    monthLabel: monthLabel,
+    planDemand: planDemand,
+    addDemandColumns: addDemandColumns,
     toBlob: toBlob
   };
 

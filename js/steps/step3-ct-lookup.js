@@ -132,6 +132,10 @@
     els.notes = h('ul', { class: 'notes' });
     els.result = h('div', { class: 'sheet-area' });
     els.exportBtn = h('button', { type: 'button', class: 'btn-primary', disabled: true, text: '匯出 Excel', onclick: onExport });
+    els.nextBtn = h('button', {
+      type: 'button', class: 'btn-secondary', disabled: true, text: '下一步：計算需求工時',
+      onclick: function () { IEApp.go('demand-hours'); }
+    });
     els.exportNote = h('span', { class: 'export-note', 'aria-live': 'polite' });
 
     panel.appendChild(h('div', { class: 'step-head' },
@@ -164,7 +168,7 @@
       h('li', { class: 'task' },
         h('h2', { text: '匯出' }),
         els.summary, els.notes, els.result,
-        h('div', { class: 'actions' }, els.exportBtn, els.exportNote))));
+        h('div', { class: 'actions' }, els.exportBtn, els.nextBtn, els.exportNote))));
 
     bindSelect(els.keyCol, 'keyCol');
     bindSelect(els.refKeyCol, 'refKeyCol');
@@ -277,6 +281,7 @@
     var step2 = IEApp.state.withP003;
     IEApp.state.withCT = null;
     els.exportBtn.disabled = true;
+    els.nextBtn.disabled = true;
     els.notes.textContent = '';
     els.result.textContent = '';
 
@@ -389,9 +394,11 @@
       outName: outputName(src),
       mainSheet: work.main.name,
       dataStartRow: sr,
+      keyCol: keyCol,
       ctCol: plan.targetCol,
       build: function () { return buildWorkbook(src, opts); }
     };
+    els.nextBtn.disabled = false;
   }
 
   function clearChoices() {
