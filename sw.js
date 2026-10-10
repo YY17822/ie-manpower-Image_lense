@@ -1,0 +1,74 @@
+/*
+ * sw.js — 離線快取。
+ * 自己的檔案：有網路時抓最新的並更新快取，沒網路時用快取（所以改了程式重新整理就會生效）。
+ * ExcelJS（網路版）：抓過一次就一直用快取。
+ * 每次新增檔案時，把檔名加進 SHELL，並把 CACHE 的版本號加 1。
+ */
+var CACHE = 'ie-manpower-v1';
+var EXCELJS_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
+var SHELL = [
+  './',
+  'index.html',
+  'manifest.webmanifest',
+  'css/style.css',
+  'js/excel-io.js',
+  'js/app.js',
+  'js/steps/step1-mps-filter.js',
+  'icons/icon-192.png',
+  'icons/icon-512.png',
+  'icons/icon-maskable-512.png'
+];
+
+self.addEventListener('install', function (event) {
+  event.waitUntil(
+    caches.open(CACHE).then(function (cache) {
+      return cache.addAll(SHELL).then(function () {
+        // ExcelJS：資料夾裡有就用資料夾的，沒有就存一份網路版；兩個都失敗也不影響安裝
+        return cache.add('vendor/exceljs.min.js').catch(function () {
+          return cache.add(new Request(EXCELJS_CDN, { mode: 'cors' })).catch(function () {});
+        });
+      });
+    }).then(function () { return self.skipWaiting(); })
+  );
+});
+
+self.addEventListener('activate', function (event) {
+  event.waitUntil(
+    caches.keys().then(function (keys) {
+      return Promise.all(keys.filter(function (k) { return k !== CACHE; }).map(function (k) { return caches.delete(k); }));
+    }).then(function () { return self.clients.claim(); })
+  );
+});
+
+self.addEventListener('fetch', function (event) {
+  var req = event.request;
+  if (req.method !== 'GET') return;
+  var url = new URL(req.url);
+
+  if (req.url === EXCELJS_CDN) {
+    event.respondWith(
+      caches.match(req).then(function (hit) {
+        return hit || fetch(req).then(function (res) {
+          if (res.ok) { var copy = res.clone(); caches.open(CACHE).then(function (c) { c.put(req, copy); }); }
+          return res;
+        });
+      })
+    );
+    return;
+  }
+
+  if (url.origin !== self.location.origin) return;
+
+  event.respondWith(
+    fetch(req).then(function (res) {
+      if (res.ok) { var copy = res.clone(); caches.open(CACHE).then(function (c) { c.put(req, copy); }); }
+      return res;
+    }).catch(function () {
+      return caches.match(req, { ignoreSearch: true }).then(function (hit) {
+        if (hit) return hit;
+        if (req.mode === 'navigate') return caches.match('index.html');
+        return Response.error();
+      });
+    })
+  );
+});

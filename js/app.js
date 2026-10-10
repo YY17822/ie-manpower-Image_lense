@@ -1,0 +1,133 @@
+/*
+ * app.js — 外框：左側步驟清單、切換步驟、各步驟之間共用的資料、載入 ExcelJS。
+ * 每個步驟是 js/steps/ 底下的一個檔案，用 IEApp.registerStep() 掛進來。
+ */
+(function (global) {
+  'use strict';
+
+  var EXCELJS_LOCAL = 'vendor/exceljs.min.js';
+  var EXCELJS_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
+
+  // 整個流程的步驟。還沒開發的步驟先列出來，做到時再補上對應的檔案。
+  var STEPS = [
+    { id: 'mps-filter', title: '篩選 MPS 報表', note: '挑出要算的料號與月份' },
+    { id: 'order-summary', title: '訂單彙總', note: '各型號每月總量、前三大' },
+    { id: 'std-hours', title: '標準工時', note: '比對工時、算總需求工時' },
+    { id: 'headcount', title: '現有人力', note: '在職人數與出勤' },
+    { id: 'report', title: '人力需求報表', note: '加班、效率損失、良率' }
+  ];
+
+  var registry = {};
+  var currentId = null;
+
+  /* ---------- 小工具：建立 DOM ---------- */
+  function h(tag, attrs) {
+    var el = document.createElement(tag);
+    if (attrs) {
+      Object.keys(attrs).forEach(function (k) {
+        var v = attrs[k];
+        if (v === null || v === undefined || v === false) return;
+        if (k === 'class') el.className = v;
+        else if (k === 'text') el.textContent = v;
+        else if (k.slice(0, 2) === 'on') el.addEventListener(k.slice(2), v);
+        else el.setAttribute(k, v === true ? '' : v);
+      });
+    }
+    for (var i = 2; i < arguments.length; i++) {
+      var child = arguments[i];
+      if (child === null || child === undefined || child === false) continue;
+      if (Array.isArray(child)) child.forEach(function (c) { if (c) el.appendChild(c); });
+      else el.appendChild(typeof child === 'string' ? document.createTextNode(child) : child);
+    }
+    return el;
+  }
+
+  /* ---------- 載入 ExcelJS：先找資料夾裡的副本，沒有才連網路 ---------- */
+  function loadScript(src, crossOrigin) {
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = src;
+      if (crossOrigin) s.crossOrigin = 'anonymous';
+      s.onload = resolve;
+      s.onerror = function () { s.remove(); reject(new Error(src)); };
+      document.head.appendChild(s);
+    });
+  }
+
+  var excelPromise = null;
+  function loadExcelJS() {
+    if (global.ExcelJS) return Promise.resolve(global.ExcelJS);
+    if (!excelPromise) {
+      excelPromise = loadScript(EXCELJS_LOCAL)
+        .catch(function () { return loadScript(EXCELJS_CDN, true); })
+        .then(function () {
+          if (!global.ExcelJS) throw new Error('ExcelJS');
+          return global.ExcelJS;
+        })
+        .catch(function () {
+          excelPromise = null;
+          throw new Error('載入不了 Excel 元件（ExcelJS）。第一次使用需要連上網路；' +
+            '如果公司網路擋外部網站，請把 exceljs.min.js 放進 vendor 資料夾（做法見 README）。');
+        });
+    }
+    return excelPromise;
+  }
+
+  /* ---------- 步驟清單 ---------- */
+  function renderStepList() {
+    var list = document.getElementById('step-list');
+    list.textContent = '';
+    STEPS.forEach(function (step, i) {
+      var ready = !!registry[step.id];
+      var active = step.id === currentId;
+      var body = [
+        h('span', { class: 'step-num', text: String(i + 1) }),
+        h('span', { class: 'step-text' },
+          h('span', { class: 'step-title', text: step.title }),
+          h('span', { class: 'step-note', text: ready ? step.note : '尚未開發' }))
+      ];
+      var item = ready
+        ? h('button', {
+            type: 'button', class: 'step' + (active ? ' is-active' : ''),
+            'aria-current': active ? 'step' : null,
+            onclick: function () { go(step.id); }
+          }, body)
+        : h('div', { class: 'step is-todo' }, body);
+      list.appendChild(h('li', null, item));
+    });
+  }
+
+  function go(id) {
+    if (!registry[id]) return;
+    currentId = id;
+    renderStepList();
+    var panel = document.getElementById('step-panel');
+    panel.textContent = '';
+    registry[id].render(panel, IEApp);
+  }
+
+  function registerStep(step) { registry[step.id] = step; }
+
+  function start() {
+    var first = STEPS.filter(function (s) { return registry[s.id]; })[0];
+    renderStepList();
+    if (first) go(first.id);
+    loadExcelJS().catch(function () { /* 上傳檔案時會再試一次並顯示訊息 */ });
+    // 離線快取只在用 http(s) 開啟時才有（直接點兩下 index.html 開啟也能用，只是不能安裝）
+    if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+      navigator.serviceWorker.register('sw.js').catch(function () {});
+    }
+  }
+
+  var IEApp = {
+    state: {},          // 各步驟的成果放這裡，下一步直接拿來用
+    h: h,
+    registerStep: registerStep,
+    go: go,
+    loadExcelJS: loadExcelJS
+  };
+  global.IEApp = IEApp;
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+  else start();
+})(window);
