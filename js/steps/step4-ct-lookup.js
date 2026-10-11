@@ -1,5 +1,5 @@
 /*
- * 第 3 步：帶入標準工時 CT.
+ * 第 4 步：帶入標準工時 CT.
  *   拿 MPS 工作表的料號（某一行），到 P003 工作表的某一行找相同的料號，
  *   找到後取那一列的 Labor ÷ Base Qty（P003 的 Labor 是做 Base Qty 個的工時，
  *   除過之後才是單件工時），填到 MPS 工作表「原本最後一行之後空一行」的位置，表頭是「CT.」。
@@ -9,8 +9,8 @@
  *   找不到的料號留空白，並標上淺紅色底。
  *
  *   來源有兩種：
- *     a. 剛才第 2 步做好的結果（不用先匯出，直接沿用）
- *     b. 上傳之前第 2 步匯出的檔案（裡面要有 MPS 和 P003 兩個工作表）
+ *     a. 剛才第 3 步做好的結果（不用先匯出，直接沿用）
+ *     b. 上傳之前第 3 步匯出的檔案（裡面要有 MPS 和 P003 兩個工作表）
  *
  * 做完之後把結果放在 IEApp.state.withCT，下一步直接拿來用。
  */
@@ -22,7 +22,7 @@
   var ui = IEApp.ui;
   var h = IEApp.h;
 
-  var STORE_KEY = 'ie-manpower.step3';
+  var STORE_KEY = 'ie-manpower.step3';       // 鍵名是舊的步驟編號，改掉會讓記住的設定不見，所以沿用
   var STEP1_KEY = 'ie-manpower.step1';
   var REF_SHEET = 'P003';
   var HEADER = 'CT.';
@@ -36,7 +36,7 @@
 
   // 這一步的狀態（切到別的步驟再回來時還在）
   var S = {
-    upload: null,         // 上傳的第 2 步檔案 { name, buffer }
+    upload: null,         // 上傳的第 3 步檔案 { name, buffer }
     preferUpload: false,  // 兩種來源都有時，用哪一個
     work: null,           // 目前拿來預覽、統計的活頁簿 { src, loading, error, wb, main, ref, mainExt, refExt, refHeaderRow }
     index: null,          // P003 料號索引
@@ -59,29 +59,29 @@
   function isRefName(name) { return String(name).toLowerCase() === REF_SHEET.toLowerCase(); }
 
   function activeSource() {
-    var step2 = IEApp.state.withP003;
-    if (S.upload && (S.preferUpload || !step2)) return { kind: 'file', key: S.upload, name: S.upload.name };
-    if (step2) return { kind: 'step2', key: step2, name: step2.outName, step2: step2 };
+    var prev = IEApp.state.withP003;
+    if (S.upload && (S.preferUpload || !prev)) return { kind: 'file', key: S.upload, name: S.upload.name };
+    if (prev) return { kind: 'prev', key: prev, name: prev.outName, prev: prev };
     return null;
   }
 
   // 來源對應的全新活頁簿（Promise）
   function buildFrom(src) {
-    return src.kind === 'step2' ? src.step2.build() : XIO.load(src.key.buffer.slice(0));
+    return src.kind === 'prev' ? src.prev.build() : XIO.load(src.key.buffer.slice(0));
   }
 
   function pickSheets(wb, src) {
     var ref = wb.worksheets.filter(function (w) { return isRefName(w.name); })[0] || null;
     var others = wb.worksheets.filter(function (w) { return !isRefName(w.name); });
-    var wanted = src.kind === 'step2' ? src.step2.mainSheet : null;
+    var wanted = src.kind === 'prev' ? src.prev.mainSheet : null;
     var main = others.filter(function (w) { return w.name === wanted; })[0] || others[0] || null;
     return { main: main, ref: ref };
   }
 
-  // MPS 的資料從第幾列開始：接著第 1、2 步做下來的話沿用第 1 步的設定
+  // MPS 的資料從第幾列開始：接著第 1、3 步做下來的話沿用第 1 步的設定
   function chainStartRow() {
     var src = activeSource();
-    return src && src.kind === 'step2' && src.step2.dataStartRow ? src.step2.dataStartRow : 0;
+    return src && src.kind === 'prev' && src.prev.dataStartRow ? src.prev.dataStartRow : 0;
   }
   function startRow() {
     var chain = chainStartRow();
@@ -107,13 +107,13 @@
     els.srcInfo = h('p', { class: 'source-line', 'aria-live': 'polite' });
     els.drop = ui.fileDrop({
       id: 'f3-base',
-      title: '上傳第 2 步匯出的 Excel',
+      title: '上傳第 3 步匯出的 Excel',
       sub: '或把檔案拖進這裡。裡面要有 MPS 和 P003 兩個工作表',
       onFile: openUpload
     });
     els.switchBtn = h('button', { type: 'button', class: 'btn-link', hidden: true, onclick: switchSource });
     els.backBtn = h('button', {
-      type: 'button', class: 'btn-link', hidden: true, text: '回到第 2 步匯入 P003',
+      type: 'button', class: 'btn-link', hidden: true, text: '回到第 3 步匯入 P003',
       onclick: function () { IEApp.go('p003-import'); }
     });
     els.srcMsg = h('p', { class: 'msg is-error', role: 'alert', hidden: true });
@@ -144,7 +144,7 @@
 
     panel.appendChild(h('ol', { class: 'tasks' },
       h('li', { class: 'task' },
-        h('h2', { text: '第 2 步的 Excel' }),
+        h('h2', { text: '第 3 步的 Excel' }),
         els.srcInfo, els.drop.el,
         h('div', { class: 'link-row' }, els.switchBtn, els.backBtn),
         els.srcMsg),
@@ -200,10 +200,10 @@
       .then(function (res) {
         var names = res.workbook.worksheets.map(function (w) { return w.name; });
         if (!names.some(isRefName)) {
-          throw new Error('這個檔案沒有 P003 工作表。請上傳第 2 步匯出的檔案，或先回到第 2 步匯入 P003。');
+          throw new Error('這個檔案沒有 P003 工作表。請上傳第 3 步匯出的檔案，或先回到第 3 步匯入 P003。');
         }
         if (names.length < 2) {
-          throw new Error('這個檔案只有 P003 工作表，沒有 MPS。請上傳第 2 步匯出的檔案。');
+          throw new Error('這個檔案只有 P003 工作表，沒有 MPS。請上傳第 3 步匯出的檔案。');
         }
         S.upload = { name: file.name, buffer: res.buffer };
         S.preferUpload = true;
@@ -278,7 +278,7 @@
   /* ---------- 更新畫面 ---------- */
   function refresh() {
     var src = activeSource();
-    var step2 = IEApp.state.withP003;
+    var prev = IEApp.state.withP003;
     IEApp.state.withCT = null;
     els.exportBtn.disabled = true;
     els.nextBtn.disabled = true;
@@ -287,10 +287,10 @@
 
     // 來源
     if (!src) {
-      els.srcInfo.textContent = '還沒有第 2 步的結果。回到第 2 步匯入 P003，或上傳之前匯出的檔案。';
+      els.srcInfo.textContent = '還沒有第 3 步的結果。回到第 3 步匯入 P003，或上傳之前匯出的檔案。';
       els.drop.setIdle();
-    } else if (src.kind === 'step2') {
-      els.srcInfo.textContent = '沿用第 2 步剛做好的結果：' + step2.outName + '。不用先匯出；要改用之前匯出的檔案，再從下面上傳。';
+    } else if (src.kind === 'prev') {
+      els.srcInfo.textContent = '沿用第 3 步剛做好的結果：' + prev.outName + '。不用先匯出；要改用之前匯出的檔案，再從下面上傳。';
       if (S.upload) els.drop.setFile(S.upload.name, '已上傳，目前沒有使用。點這裡換一個檔案');
       else els.drop.setIdle();
     } else {
@@ -298,8 +298,8 @@
       els.drop.setFile(S.upload.name);
     }
     els.backBtn.hidden = !!src;
-    els.switchBtn.hidden = !(S.upload && step2);
-    if (src) els.switchBtn.textContent = src.kind === 'file' ? '改用第 2 步剛做好的結果' : '改用上傳的檔案';
+    els.switchBtn.hidden = !(S.upload && prev);
+    if (src) els.switchBtn.textContent = src.kind === 'file' ? '改用第 3 步剛做好的結果' : '改用上傳的檔案';
 
     var chain = chainStartRow();
     els.startRow.value = String(startRow());
@@ -308,7 +308,7 @@
 
     if (!src) {
       clearChoices();
-      setSummary('先準備好第 2 步的 Excel。');
+      setSummary('先準備好第 3 步的 Excel。');
       return;
     }
 

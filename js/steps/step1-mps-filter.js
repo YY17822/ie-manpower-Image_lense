@@ -98,8 +98,8 @@
     els.outPreview = h('div', { class: 'sheet-area' });
     els.exportBtn = h('button', { type: 'button', class: 'btn-primary', disabled: true, text: '匯出 Excel', onclick: onExport });
     els.nextBtn = h('button', {
-      type: 'button', class: 'btn-secondary', disabled: true, text: '下一步：匯入 P003',
-      onclick: function () { IEApp.go('p003-import'); }
+      type: 'button', class: 'btn-secondary', disabled: true, text: '下一步：匯總',
+      onclick: function () { IEApp.go('mps-totals'); }
     });
     els.exportNote = h('span', { class: 'export-note', 'aria-live': 'polite' });
 

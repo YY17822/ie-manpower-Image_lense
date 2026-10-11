@@ -1,5 +1,5 @@
 /*
- * ui.js — 各步驟共用的畫面元件：上傳區、試算表預覽、讀檔、下載。
+ * ui.js — 各步驟共用的畫面元件：上傳區、試算表預覽、讀檔、下載，以及 WIP／月份行的共用設定。
  */
 (function (global) {
   'use strict';
@@ -168,10 +168,32 @@
     return cell.isMerged ? cell.master.value : cell.value;
   }
 
+  /* ---------- WIP、各月產量在哪幾行（第 2 步匯總和第 5 步計算需求工時共用） ---------- */
+  // 兩個步驟讀寫的是同一份設定，在其中一步改了，另一步也會跟著變，避免兩邊對不起來。
+  var COLUMNS_KEY = 'ie-manpower.columns';
+  var COLUMNS_OLD_KEY = 'ie-manpower.step4';       // 舊版存在這裡，第一次讀的時候搬過來
+
+  function readJson(key) {
+    try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch (e) { return null; }
+  }
+  function getColumns() {
+    var s = readJson(COLUMNS_KEY) || readJson(COLUMNS_OLD_KEY) || {};
+    return {
+      wipCol: s.wipCol === undefined ? '' : String(s.wipCol),
+      monthCols: s.monthCols === undefined ? '' : String(s.monthCols)
+    };
+  }
+  function setColumns(value) {
+    try {
+      localStorage.setItem(COLUMNS_KEY, JSON.stringify({ wipCol: value.wipCol || '', monthCols: value.monthCols || '' }));
+    } catch (e) { /* 存不了就算了 */ }
+  }
+
   IEApp.ui = {
     fileDrop: fileDrop,
     readWorkbook: readWorkbook,
     download: download,
-    renderSheet: renderSheet
+    renderSheet: renderSheet,
+    columns: { get: getColumns, set: setColumns }
   };
 })(window);

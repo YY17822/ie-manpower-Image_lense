@@ -1,5 +1,5 @@
 /*
- * 第 5 步：彙總
+ * 第 6 步：匯總
  *   在需求工時那一塊的下面（最後一列資料之後空一列）加三列，每格都是公式：
  *
  *     Production 總需求工時   =SUM(N5:N74)                                    每月所有料號加總
@@ -13,8 +13,8 @@
  *   排名是一個料號（一列）算一個。
  *
  *   來源有兩種：
- *     a. 剛才第 4 步做好的結果（不用先匯出，直接沿用）
- *     b. 上傳之前第 4 步匯出的檔案（MPS 工作表裡要有「需求工時」）
+ *     a. 剛才第 5 步做好的結果（不用先匯出，直接沿用）
+ *     b. 上傳之前第 5 步匯出的檔案（MPS 工作表裡要有「需求工時」）
  *
  * 做完之後把結果放在 IEApp.state.withSummary，下一步直接拿來用。
  */
@@ -26,16 +26,16 @@
   var ui = IEApp.ui;
   var h = IEApp.h;
 
-  var STORE_KEY = 'ie-manpower.step5';
+  var STORE_KEY = 'ie-manpower.step5';       // 鍵名是舊的步驟編號，改掉會讓記住的設定不見，所以沿用
   var STEP1_KEY = 'ie-manpower.step1';
   var REF_SHEET = 'P003';
   var TITLE = '需求工時';
-  var SUFFIX = '_彙總';
+  var SUFFIX = '_工時匯總';
   var TOP_N = 3;
   var LABELS = { total: 'Production 總需求工時', top: 'Top 3 總需求工時', rest: 'Others 總需求工時' };
 
   var S = {
-    upload: null,         // 上傳的第 4 步檔案 { name, buffer }
+    upload: null,         // 上傳的第 5 步檔案 { name, buffer }
     preferUpload: false,
     work: null            // 拿來預覽的活頁簿 { src, loading, error, wb, main }
   };
@@ -54,25 +54,25 @@
   function isRefName(name) { return String(name).toLowerCase() === REF_SHEET.toLowerCase(); }
 
   function activeSource() {
-    var step4 = IEApp.state.withDemand;
-    if (S.upload && (S.preferUpload || !step4)) return { kind: 'file', key: S.upload, name: S.upload.name };
-    if (step4) return { kind: 'step4', key: step4, name: step4.outName, step4: step4 };
+    var prev = IEApp.state.withDemand;
+    if (S.upload && (S.preferUpload || !prev)) return { kind: 'file', key: S.upload, name: S.upload.name };
+    if (prev) return { kind: 'prev', key: prev, name: prev.outName, prev: prev };
     return null;
   }
 
   function buildFrom(src) {
-    return src.kind === 'step4' ? src.step4.build() : XIO.load(src.key.buffer.slice(0));
+    return src.kind === 'prev' ? src.prev.build() : XIO.load(src.key.buffer.slice(0));
   }
 
   function pickMain(wb, src) {
     var others = wb.worksheets.filter(function (w) { return !isRefName(w.name); });
-    var wanted = src.kind === 'step4' ? src.step4.mainSheet : null;
+    var wanted = src.kind === 'prev' ? src.prev.mainSheet : null;
     return others.filter(function (w) { return w.name === wanted; })[0] || others[0] || null;
   }
 
   function chainStartRow() {
     var src = activeSource();
-    return src && src.kind === 'step4' && src.step4.dataStartRow ? src.step4.dataStartRow : 0;
+    return src && src.kind === 'prev' && src.prev.dataStartRow ? src.prev.dataStartRow : 0;
   }
   function startRow() {
     var chain = chainStartRow();
@@ -93,13 +93,13 @@
     els.srcInfo = h('p', { class: 'source-line', 'aria-live': 'polite' });
     els.drop = ui.fileDrop({
       id: 'f5-base',
-      title: '上傳第 4 步匯出的 Excel',
+      title: '上傳第 5 步匯出的 Excel',
       sub: '或把檔案拖進這裡。MPS 工作表裡要有「需求工時」',
       onFile: openUpload
     });
     els.switchBtn = h('button', { type: 'button', class: 'btn-link', hidden: true, onclick: switchSource });
     els.backBtn = h('button', {
-      type: 'button', class: 'btn-link', hidden: true, text: '回到第 4 步計算需求工時',
+      type: 'button', class: 'btn-link', hidden: true, text: '回到第 5 步計算需求工時',
       onclick: function () { IEApp.go('demand-hours'); }
     });
     els.srcMsg = h('p', { class: 'msg is-error', role: 'alert', hidden: true });
@@ -118,12 +118,12 @@
     els.exportNote = h('span', { class: 'export-note', 'aria-live': 'polite' });
 
     panel.appendChild(h('div', { class: 'step-head' },
-      h('h1', { text: '彙總' }),
+      h('h1', { text: '需求工時匯總' }),
       h('p', { text: '在需求工時下面加上每個月正常生產的總需求工時（Production）、前三大料號的合計（Top 3），以及其他料號的合計（Others，Production 減 Top 3）。每格都是公式，前三大的儲存格會標成淺橘色，數值是 0 的不算。' })));
 
     panel.appendChild(h('ol', { class: 'tasks' },
       h('li', { class: 'task' },
-        h('h2', { text: '第 4 步的 Excel' }),
+        h('h2', { text: '第 5 步的 Excel' }),
         els.srcInfo, els.drop.el,
         h('div', { class: 'link-row' }, els.switchBtn, els.backBtn),
         els.srcMsg,
@@ -152,7 +152,7 @@
     ui.readWorkbook(file)
       .then(function (res) {
         var others = res.workbook.worksheets.filter(function (w) { return !isRefName(w.name); });
-        if (!others.length) throw new Error('這個檔案沒有 MPS 工作表。請上傳第 4 步匯出的檔案。');
+        if (!others.length) throw new Error('這個檔案沒有 MPS 工作表。請上傳第 5 步匯出的檔案。');
         S.upload = { name: file.name, buffer: res.buffer };
         S.preferUpload = true;
         els.exportNote.textContent = '';
@@ -194,7 +194,7 @@
   /* ---------- 更新畫面 ---------- */
   function refresh() {
     var src = activeSource();
-    var step4 = IEApp.state.withDemand;
+    var prev = IEApp.state.withDemand;
     IEApp.state.withSummary = null;
     els.exportBtn.disabled = true;
     els.nextBtn.disabled = true;
@@ -203,10 +203,10 @@
     els.tops.textContent = '';
 
     if (!src) {
-      els.srcInfo.textContent = '還沒有第 4 步的結果。回到第 4 步計算需求工時，或上傳之前匯出的檔案。';
+      els.srcInfo.textContent = '還沒有第 5 步的結果。回到第 5 步計算需求工時，或上傳之前匯出的檔案。';
       els.drop.setIdle();
-    } else if (src.kind === 'step4') {
-      els.srcInfo.textContent = '沿用第 4 步剛做好的結果：' + step4.outName + '。不用先匯出；要改用之前匯出的檔案，再從下面上傳。';
+    } else if (src.kind === 'prev') {
+      els.srcInfo.textContent = '沿用第 5 步剛做好的結果：' + prev.outName + '。不用先匯出；要改用之前匯出的檔案，再從下面上傳。';
       if (S.upload) els.drop.setFile(S.upload.name, '已上傳，目前沒有使用。點這裡換一個檔案');
       else els.drop.setIdle();
     } else {
@@ -214,15 +214,15 @@
       els.drop.setFile(S.upload.name);
     }
     els.backBtn.hidden = !!src;
-    els.switchBtn.hidden = !(S.upload && step4);
-    if (src) els.switchBtn.textContent = src.kind === 'file' ? '改用第 4 步剛做好的結果' : '改用上傳的檔案';
+    els.switchBtn.hidden = !(S.upload && prev);
+    if (src) els.switchBtn.textContent = src.kind === 'file' ? '改用第 5 步剛做好的結果' : '改用上傳的檔案';
 
     var chain = chainStartRow();
     els.startRow.value = String(startRow());
     els.startRow.disabled = !!chain;
     els.startNote.textContent = chain ? '列開始（沿用第 1 步的設定）' : '列開始';
 
-    if (!src) { setSummary('先準備好第 4 步的 Excel。'); return; }
+    if (!src) { setSummary('先準備好第 5 步的 Excel。'); return; }
 
     ensureWork(src);
     var work = S.work;
@@ -230,12 +230,12 @@
     if (work.error) { setSummary(work.error, true); return; }
 
     var sr = startRow();
-    var keyCol = src.kind === 'step4' && src.step4.keyCol ? src.step4.keyCol : 1;
+    var keyCol = src.kind === 'prev' && src.prev.keyCol ? src.prev.keyCol : 1;
     var opts = { dataStartRow: sr, keyCol: keyCol, title: TITLE, topN: TOP_N, labels: LABELS };
     var plan = XIO.planSummary(work.main, opts);
 
     if (!plan.found) {
-      setSummary('MPS 工作表裡找不到「需求工時」。請先做第 4 步計算需求工時。', true);
+      setSummary('MPS 工作表裡找不到「需求工時」。請先做第 5 步計算需求工時。', true);
       return;
     }
     if (!plan.lastRow) {
@@ -246,7 +246,7 @@
     var firstL = XIO.numToCol(plan.startCol);
     var lastL = XIO.numToCol(plan.startCol + plan.width - 1);
     var hasError = plan.months.some(function (m) { return !!m.error; });
-    setSummary('彙總會填在 ' + work.main.name + ' 工作表的第 ' + plan.totalRow + ' 到 ' + plan.restRow +
+    setSummary('匯總會填在 ' + work.main.name + ' 工作表的第 ' + plan.totalRow + ' 到 ' + plan.restRow +
       ' 列（最後一列資料是第 ' + plan.lastRow + ' 列，空一列），' + firstL + ' 到 ' + lastL + ' 行，共 ' +
       plan.width + ' 個月。', false, hasError);
 
@@ -254,7 +254,7 @@
       var bad = plan.months.filter(function (m) { return !!m.error; })
         .map(function (m) { return XIO.numToCol(m.col) + (m.header ? '（' + m.header + '）' : ''); });
       els.notes.appendChild(h('li', { class: 'is-warn' },
-        bad.join('、') + ' 行有算不出來的格子（例如 #DIV/0!），Excel 裡這幾個月的彙總也會顯示錯誤。請先回第 3 步處理。'));
+        bad.join('、') + ' 行有算不出來的格子（例如 #DIV/0!），Excel 裡這幾個月的匯總也會顯示錯誤。請先回第 4 步處理。'));
     }
 
     renderResult(plan);
@@ -290,7 +290,7 @@
     return h('th', { class: 'colhead', scope: 'col', text: XIO.numToCol(m.col) + (m.header ? '　' + m.header : '') });
   }
 
-  // 三個彙總列算出來的數字，以及第一個月填入的公式
+  // 三個匯總列算出來的數字，以及第一個月填入的公式
   function renderResult(plan) {
     var head = h('tr', null,
       h('th', { class: 'colhead', scope: 'col', text: '列' }),
@@ -308,8 +308,8 @@
       body.appendChild(tr);
     });
 
-    els.result.appendChild(h('p', { class: 'sheet-caption', text: '彙總結果。' }));
-    els.result.appendChild(h('div', { class: 'sheet-scroll', tabindex: '0', role: 'group', 'aria-label': '彙總結果' },
+    els.result.appendChild(h('p', { class: 'sheet-caption', text: '匯總結果。' }));
+    els.result.appendChild(h('div', { class: 'sheet-scroll', tabindex: '0', role: 'group', 'aria-label': '匯總結果' },
       h('table', { class: 'sheet is-result' }, h('thead', null, head), body)));
 
     var L = XIO.numToCol(plan.startCol);

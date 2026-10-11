@@ -1,6 +1,6 @@
 /*
- * 第 6 步：RMA 需求工時
- *   前面算的都是正常生產（Production）的需求工時。這一步在彙總那一塊的下面空一列，
+ * 第 7 步：RMA 需求工時
+ *   前面算的都是正常生產（Production）的需求工時。這一步在匯總那一塊的下面空一列，
  *   加上重工（RMA）的需求工時。項目由使用者在畫面上自己輸入，列數可以增減：
  *
  *     CT.   RMA總需求工時   =SUM(N81:N83)     底下各項目的合計
@@ -9,13 +9,13 @@
  *
  *   每個項目要輸入：名稱、CT.、各月的重工數量。
  *   數量直接寫在公式裡，CT. 放在項目名稱左邊那一格；之後在 Excel 改 CT.，工時會跟著變。
- *   外觀和彙總那一塊一樣：外框粗線、裡面細格線。
+ *   外觀和匯總那一塊一樣：外框粗線、裡面細格線。
  *
  *   項目名稱和 CT. 會記在這台電腦的瀏覽器裡（每個月大致相同）；數量每次都要重新輸入。
  *
  *   來源有兩種：
- *     a. 剛才第 5 步做好的結果（不用先匯出，直接沿用）
- *     b. 上傳之前第 5 步匯出的檔案（MPS 工作表裡要有彙總那三列）
+ *     a. 剛才第 6 步做好的結果（不用先匯出，直接沿用）
+ *     b. 上傳之前第 6 步匯出的檔案（MPS 工作表裡要有匯總那三列）
  *
  * 做完之後把結果放在 IEApp.state.withRma，下一步直接拿來用。
  */
@@ -27,17 +27,17 @@
   var ui = IEApp.ui;
   var h = IEApp.h;
 
-  var STORE_KEY = 'ie-manpower.step6';
+  var STORE_KEY = 'ie-manpower.step6';       // 鍵名是舊的步驟編號，改掉會讓記住的設定不見，所以沿用
   var STEP1_KEY = 'ie-manpower.step1';
   var REF_SHEET = 'P003';
   var TITLE = '需求工時';
-  var SUMMARY_MARK = '總需求工時';       // 彙總第一列的標籤裡一定有這幾個字
+  var SUMMARY_MARK = '總需求工時';       // 匯總第一列的標籤裡一定有這幾個字
   var LABELS = { title: 'RMA總需求工時', ct: 'CT.' };
   var SUFFIX = '_RMA';
   var DEFAULT_MONTHS = 6;
 
   var S = {
-    upload: null,         // 上傳的第 5 步檔案 { name, buffer }
+    upload: null,         // 上傳的第 6 步檔案 { name, buffer }
     preferUpload: false,
     work: null,           // 拿來預覽的活頁簿 { src, loading, error, wb, main }
     items: null           // 使用者輸入的項目 [{ name, ct, qty: ['', '', …] }]（都是輸入框裡的文字）
@@ -85,25 +85,25 @@
   function isRefName(name) { return String(name).toLowerCase() === REF_SHEET.toLowerCase(); }
 
   function activeSource() {
-    var step5 = IEApp.state.withSummary;
-    if (S.upload && (S.preferUpload || !step5)) return { kind: 'file', key: S.upload, name: S.upload.name };
-    if (step5) return { kind: 'step5', key: step5, name: step5.outName, step5: step5 };
+    var prev = IEApp.state.withSummary;
+    if (S.upload && (S.preferUpload || !prev)) return { kind: 'file', key: S.upload, name: S.upload.name };
+    if (prev) return { kind: 'prev', key: prev, name: prev.outName, prev: prev };
     return null;
   }
 
   function buildFrom(src) {
-    return src.kind === 'step5' ? src.step5.build() : XIO.load(src.key.buffer.slice(0));
+    return src.kind === 'prev' ? src.prev.build() : XIO.load(src.key.buffer.slice(0));
   }
 
   function pickMain(wb, src) {
     var others = wb.worksheets.filter(function (w) { return !isRefName(w.name); });
-    var wanted = src.kind === 'step5' ? src.step5.mainSheet : null;
+    var wanted = src.kind === 'prev' ? src.prev.mainSheet : null;
     return others.filter(function (w) { return w.name === wanted; })[0] || others[0] || null;
   }
 
   function chainStartRow() {
     var src = activeSource();
-    return src && src.kind === 'step5' && src.step5.dataStartRow ? src.step5.dataStartRow : 0;
+    return src && src.kind === 'prev' && src.prev.dataStartRow ? src.prev.dataStartRow : 0;
   }
   function startRow() {
     var chain = chainStartRow();
@@ -124,13 +124,13 @@
     els.srcInfo = h('p', { class: 'source-line', 'aria-live': 'polite' });
     els.drop = ui.fileDrop({
       id: 'f6-base',
-      title: '上傳第 5 步匯出的 Excel',
-      sub: '或把檔案拖進這裡。MPS 工作表裡要有彙總那三列',
+      title: '上傳第 6 步匯出的 Excel',
+      sub: '或把檔案拖進這裡。MPS 工作表裡要有匯總那三列',
       onFile: openUpload
     });
     els.switchBtn = h('button', { type: 'button', class: 'btn-link', hidden: true, onclick: switchSource });
     els.backBtn = h('button', {
-      type: 'button', class: 'btn-link', hidden: true, text: '回到第 5 步彙總',
+      type: 'button', class: 'btn-link', hidden: true, text: '回到第 6 步匯總',
       onclick: function () { IEApp.go('summary'); }
     });
     els.srcMsg = h('p', { class: 'msg is-error', role: 'alert', hidden: true });
@@ -147,11 +147,11 @@
 
     panel.appendChild(h('div', { class: 'step-head' },
       h('h1', { text: 'RMA 需求工時' }),
-      h('p', { text: '前面算的是正常生產的需求工時。這一步在彙總下面空一列，加上重工（RMA）的需求工時：每個項目輸入名稱、CT. 和各月的重工數量，工時用公式算（數量 × CT.），第一列是各項目的合計。' })));
+      h('p', { text: '前面算的是正常生產的需求工時。這一步在匯總下面空一列，加上重工（RMA）的需求工時：每個項目輸入名稱、CT. 和各月的重工數量，工時用公式算（數量 × CT.），第一列是各項目的合計。' })));
 
     panel.appendChild(h('ol', { class: 'tasks' },
       h('li', { class: 'task' },
-        h('h2', { text: '第 5 步的 Excel' }),
+        h('h2', { text: '第 6 步的 Excel' }),
         els.srcInfo, els.drop.el,
         h('div', { class: 'link-row' }, els.switchBtn, els.backBtn),
         els.srcMsg,
@@ -185,7 +185,7 @@
     ui.readWorkbook(file)
       .then(function (res) {
         var others = res.workbook.worksheets.filter(function (w) { return !isRefName(w.name); });
-        if (!others.length) throw new Error('這個檔案沒有 MPS 工作表。請上傳第 5 步匯出的檔案。');
+        if (!others.length) throw new Error('這個檔案沒有 MPS 工作表。請上傳第 6 步匯出的檔案。');
         S.upload = { name: file.name, buffer: res.buffer };
         S.preferUpload = true;
         els.exportNote.textContent = '';
@@ -325,16 +325,16 @@
   /* ---------- 更新畫面 ---------- */
   function refresh() {
     var src = activeSource();
-    var step5 = IEApp.state.withSummary;
+    var prev = IEApp.state.withSummary;
     IEApp.state.withRma = null;
     els.exportBtn.disabled = true;
     els.result.textContent = '';
 
     if (!src) {
-      els.srcInfo.textContent = '還沒有第 5 步的結果。回到第 5 步彙總，或上傳之前匯出的檔案。';
+      els.srcInfo.textContent = '還沒有第 6 步的結果。回到第 6 步匯總，或上傳之前匯出的檔案。';
       els.drop.setIdle();
-    } else if (src.kind === 'step5') {
-      els.srcInfo.textContent = '沿用第 5 步剛做好的結果：' + step5.outName + '。不用先匯出；要改用之前匯出的檔案，再從下面上傳。';
+    } else if (src.kind === 'prev') {
+      els.srcInfo.textContent = '沿用第 6 步剛做好的結果：' + prev.outName + '。不用先匯出；要改用之前匯出的檔案，再從下面上傳。';
       if (S.upload) els.drop.setFile(S.upload.name, '已上傳，目前沒有使用。點這裡換一個檔案');
       else els.drop.setIdle();
     } else {
@@ -342,8 +342,8 @@
       els.drop.setFile(S.upload.name);
     }
     els.backBtn.hidden = !!src;
-    els.switchBtn.hidden = !(S.upload && step5);
-    if (src) els.switchBtn.textContent = src.kind === 'file' ? '改用第 5 步剛做好的結果' : '改用上傳的檔案';
+    els.switchBtn.hidden = !(S.upload && prev);
+    if (src) els.switchBtn.textContent = src.kind === 'file' ? '改用第 6 步剛做好的結果' : '改用上傳的檔案';
 
     var chain = chainStartRow();
     els.startRow.value = String(startRow());
@@ -354,11 +354,11 @@
     var plan = null;
     var problem = '';
     var sr = startRow();
-    var keyCol = src && src.kind === 'step5' && src.step5.keyCol ? src.step5.keyCol : 1;
+    var keyCol = src && src.kind === 'prev' && src.prev.keyCol ? src.prev.keyCol : 1;
     var base = { dataStartRow: sr, keyCol: keyCol, title: TITLE, summaryMark: SUMMARY_MARK };
 
     if (!src) {
-      problem = '先準備好第 5 步的 Excel。';
+      problem = '先準備好第 6 步的 Excel。';
     } else {
       ensureWork(src);
       if (S.work.loading) problem = '準備資料中…';
@@ -367,10 +367,10 @@
         plan = XIO.planRma(S.work.main, base);
         if (!plan.found) {
           problem = plan.reason === 'summary'
-            ? 'MPS 工作表裡找不到彙總那三列。請先做第 5 步彙總。'
+            ? 'MPS 工作表裡找不到匯總那三列。請先做第 6 步匯總。'
             : plan.reason === 'rows'
               ? '第 ' + sr + ' 列之後沒有料號。請確認上傳的檔案。'
-              : 'MPS 工作表裡找不到「需求工時」。請先做第 4、5 步。';
+              : 'MPS 工作表裡找不到「需求工時」。請先做第 5、6 步。';
           plan = null;
         }
       }

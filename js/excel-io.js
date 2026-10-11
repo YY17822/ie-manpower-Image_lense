@@ -926,7 +926,8 @@
     var rows = [];
     var found = 0, missing = 0, blank = 0, errors = 0;
     var multiKeys = {}, diffKeys = {};
-    for (var r = o.dataStartRow; r <= ext.lastRow; r++) {
+    var lastDataRow = lastKeyRow(main, o.keyCol, o.dataStartRow);   // 下面的匯總列不算資料
+    for (var r = o.dataStartRow; r <= lastDataRow; r++) {
       var row = main.findRow(r);
       var cell = row ? row.findCell(o.keyCol) : null;
       var key = lookupKey(cellRawValue(cell));
@@ -961,6 +962,7 @@
       targetCol: targetCol,
       isNew: !existing,
       lastCol: existing ? existing : lastCol,
+      lastDataRow: lastDataRow,
       rows: rows,
       found: found,
       missing: missing,
@@ -1034,7 +1036,7 @@
     // 重做時，把這一行裡不再對得到的舊內容清掉
     if (!plan.isNew) {
       eachStoredRow(main, function (row, r) {
-        if (r < o.dataStartRow || done[r]) return;
+        if (r < o.dataStartRow || r > plan.lastDataRow || done[r]) return;
         var old = row.findCell(col);
         if (old) old.value = null;
       });
@@ -1239,13 +1241,210 @@
     return plan;
   }
 
-  /* ---------- 彙總：每月總需求工時、前三大、其他 ---------- */
+  /* ---------- MPS 匯總：各月預計總產量、前三大、其他 ---------- */
+
+  var TOTAL_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB5E48C' } };   // 淺綠色（#B5E48C）：Total 那一列的底色
+
+  /*
+   * 先算出 MPS 各月的匯總，不動工作表（給畫面預覽用）。
+   *
+   * o.dataStartRow  資料從第幾列開始
+   * o.keyCol        料號在哪一行（用來判斷資料到第幾列、以及顯示前三大是誰）
+   * o.wipCol        當月 WIP 在哪一行
+   * o.monthCols     各月預計產量在哪幾行（陣列，第一個是當月）
+   * o.topN          前幾大（預設 3）
+   *
+   * 當月（第一個月）的數量一律先加上 WIP：總產量、前三大、標示都是用「WIP + 當月產量」來算。
+   *
+   * 回傳：
+   *   found       有沒有資料
+   *   firstRow / lastRow   資料的第一列、最後一列
+   *   totalRow / topRow / restRow   三個匯總列的列號（最後一列資料之後空一列開始）
+   *   labelCol    文字標籤放在哪一行（第一個月左邊那一行）
+   *   months      [{ col, total, top, rest, error, topRows: [{ row, label, value }] }]
+   *               topRows 只列數值大於 0 的
+   */
+  function planMpsTotals(main, o) {
+    var lastRow = lastKeyRow(main, o.keyCol, o.dataStartRow);
+    if (!lastRow) return { found: false };
+    var topN = o.topN || 3;
+    var months = o.monthCols.map(function (c, i) {
+      var items = [];
+      var error = null;
+      for (var r = o.dataStartRow; r <= lastRow; r++) {
+        var row = main.findRow(r);
+        var qty = numberOrError(row ? row.findCell(c) : null);
+        var wip = i === 0 ? numberOrError(row ? row.findCell(o.wipCol) : null) : { value: 0 };
+        if (qty.error || wip.error) { if (!error) error = qty.error || wip.error; continue; }
+        var keyCell = row ? row.findCell(o.keyCol) : null;
+        items.push({ row: r, label: keyCell ? displayText(keyCell) : '', value: qty.value + wip.value });
+      }
+      var total = 0;
+      items.forEach(function (it) { total += it.value; });
+      var topRows = items.filter(function (it) { return it.value > 0; })
+        .sort(function (a, b) { return b.value - a.value || a.row - b.row; }).slice(0, topN);
+      var top = 0;
+      topRows.forEach(function (it) { top += it.value; });
+      return { col: c, total: total, top: top, rest: total - top, error: error, topRows: topRows };
+    });
+    var firstMonth = Math.min.apply(null, o.monthCols);
+    return {
+      found: true,
+      firstRow: o.dataStartRow,
+      lastRow: lastRow,
+      totalRow: lastRow + 2,
+      topRow: lastRow + 3,
+      restRow: lastRow + 4,
+      labelCol: firstMonth > 1 ? firstMonth - 1 : 0,
+      months: months
+    };
+  }
+
+  /*
+   * 把 MPS 匯總寫進工作表（最後一列資料之後空一列開始，共三列，對齊各月的行），每格都是公式。
+   * 以 WIP 在 D 行、當月在 E 行、資料在第 5 到 74 列為例：
+   *
+   *                 當月（要加 WIP）                              其他月份
+   *   Total       =SUM(D5:D74)+SUM(E5:E74)                       =SUM(F5:F74)
+   *   Top 3       =SUMPRODUCT(LARGE(D5:D74+E5:E74,{1,2,3}))      =LARGE(F5:F74,1)+LARGE(F5:F74,2)+LARGE(F5:F74,3)
+   *   Non-Top 3   =E76-E77                                       =F76-F77
+   *
+   * 外觀：文字標籤放在第一個月左邊那一行、置中；標籤加上各月圍成一塊，外框粗線、裡面細格線。
+   *       Total 那一列整列是淺綠色底（#B5E48C）。
+   *
+   * 各月前三大的儲存格用「條件式格式」標上淺橘色，數值是 0 的不算：
+   *   當月     =AND($D5+E5>0, SUMPRODUCT(--($D$5:$D$74+E$5:E$74>$D5+E5))<3)   比「WIP + 當月」大的不到 3 個
+   *   其他月   =AND(F5>0, F5>=LARGE(F$5:F$74,3))
+   *
+   * o.labels = { total, top, rest }  三列的文字標籤
+   * 其餘參數和 planMpsTotals 一樣，回傳的也是同一份結果。
+   */
+  function addMpsTotals(main, o) {
+    var plan = planMpsTotals(main, o);
+    if (!plan.found) return plan;
+    var first = plan.firstRow, last = plan.lastRow;
+    var topN = Math.min(o.topN || 3, last - first + 1);
+    var rows = [plan.totalRow, plan.topRow, plan.restRow];
+    var texts = [o.labels.total, o.labels.top, o.labels.rest];
+    var leftCol = plan.labelCol || Math.min.apply(null, o.monthCols);
+    var rightCol = Math.max.apply(null, o.monthCols);
+    var inMonth = {};
+    o.monthCols.forEach(function (c) { inMonth[c] = true; });
+
+    // 重做時，先把這三列在這一塊裡原本的內容清掉
+    rows.forEach(function (r) {
+      var row = main.findRow(r);
+      if (!row) return;
+      eachStoredCell(row, function (cell, c) {
+        if (c < leftCol || c > rightCol) return;
+        cell.value = null; cell.style = {};
+      });
+    });
+
+    var THIN = { style: 'thin' }, THICK = { style: 'medium' };
+    function boxBorder(r, c) {
+      return {
+        top: r === rows[0] ? THICK : THIN,
+        bottom: r === rows[rows.length - 1] ? THICK : THIN,
+        left: c === leftCol ? THICK : THIN,
+        right: c === rightCol ? THICK : THIN
+      };
+    }
+    var sample = main.findCell(first, o.monthCols[0]);
+    var font = sample && sample.style && sample.style.font ? Object.assign({}, sample.style.font) : undefined;
+    if (font) delete font.bold;
+
+    var wipL = numToCol(o.wipCol);
+    var ks = [];
+    for (var k = 1; k <= topN; k++) ks.push(k);
+
+    plan.months.forEach(function (m, i) {
+      var L = numToCol(m.col);
+      var range = L + first + ':' + L + last;
+      var wipRange = wipL + first + ':' + wipL + last;
+      var formulas;
+      if (i === 0) {
+        formulas = [
+          'SUM(' + wipRange + ')+SUM(' + range + ')',
+          'SUMPRODUCT(LARGE(' + wipRange + '+' + range + ',{' + ks.join(',') + '}))',
+          L + plan.totalRow + '-' + L + plan.topRow
+        ];
+      } else {
+        formulas = [
+          'SUM(' + range + ')',
+          ks.map(function (n) { return 'LARGE(' + range + ',' + n + ')'; }).join('+'),
+          L + plan.totalRow + '-' + L + plan.topRow
+        ];
+      }
+      var results = m.error ? [{ error: m.error }, { error: m.error }, { error: m.error }] : [m.total, m.top, m.rest];
+      rows.forEach(function (r, j) {
+        var cell = main.getCell(r, m.col);
+        var style = { numFmt: INTEGER_FORMAT, border: boxBorder(r, m.col), alignment: { vertical: 'middle' } };
+        if (font) style.font = font;
+        if (j === 0) style.fill = TOTAL_FILL;
+        cell.style = style;
+        cell.value = { formula: formulas[j], result: results[j] };
+      });
+    });
+
+    if (plan.labelCol) {
+      rows.forEach(function (r, j) {
+        var cell = main.getCell(r, plan.labelCol);
+        var style = { border: boxBorder(r, plan.labelCol), alignment: { horizontal: 'center', vertical: 'middle' } };
+        if (font) style.font = font;
+        if (j === 0) style.fill = TOTAL_FILL;
+        cell.style = style;
+        cell.value = texts[j];
+      });
+      var labelColumn = main.getColumn(plan.labelCol);
+      if (!labelColumn.width || labelColumn.width < 12) labelColumn.width = 12;
+    }
+
+    // 前三大標淺橘色：先拿掉之前加在這幾行的規則，再一個月加一條
+    main.conditionalFormattings = (main.conditionalFormattings || []).filter(function (cf) {
+      var m = /^([A-Z]+)\d+:([A-Z]+)\d+$/.exec(String(cf.ref || ''));
+      return !(m && m[1] === m[2] && inMonth[colToNum(m[1])]);
+    });
+    var fillStyle = { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: TOP_FILL_ARGB } } };
+    plan.months.forEach(function (m, i) {
+      var L = numToCol(m.col);
+      var here = L + first;
+      var formula;
+      if (i === 0) {
+        var both = '$' + wipL + first + '+' + here;
+        formula = 'AND(' + both + '>0,SUMPRODUCT(--($' + wipL + '$' + first + ':$' + wipL + '$' + last + '+' +
+          L + '$' + first + ':' + L + '$' + last + '>' + both + '))<' + topN + ')';
+      } else {
+        formula = 'AND(' + here + '>0,' + here + '>=LARGE(' + L + '$' + first + ':' + L + '$' + last + ',' + topN + '))';
+      }
+      main.addConditionalFormatting({
+        ref: L + first + ':' + L + last,
+        rules: [{ type: 'expression', priority: nextPriority(main), formulae: [formula], style: fillStyle }]
+      });
+    });
+
+    var wb = main.workbook;
+    if (wb) wb.calcProperties = Object.assign({}, wb.calcProperties, { fullCalcOnLoad: true });
+
+    return plan;
+  }
+
+  /* ---------- 需求工時匯總：每月總需求工時、前三大、其他 ---------- */
 
   var TOP_FILL_ARGB = 'FFFFD8A8';     // 淺橘色
+
+  // 新的條件式格式規則要用的優先順序：接在這張工作表現有規則的後面
+  function nextPriority(ws) {
+    var max = 0;
+    (ws.conditionalFormattings || []).forEach(function (cf) {
+      (cf.rules || []).forEach(function (rule) { if (rule.priority > max) max = rule.priority; });
+    });
+    return max + 1;
+  }
   var HEAD_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFA2D2FF' } };   // 淺藍色（#A2D2FF）：Production、RMA 這兩列的底色
   var LABEL_WIDTH = 26;               // 文字標籤那一行至少要多寬，才放得下「Production 總需求工時」
 
-  // 料號那一行最後一列有內容的列號（彙總列在它下面，不算資料）
+  // 料號那一行最後一列有內容的列號（匯總列在它下面，不算資料）
   function lastKeyRow(ws, keyCol, dataStartRow) {
     var last = 0;
     eachStoredRow(ws, function (row, r) {
@@ -1257,7 +1456,7 @@
   }
 
   /*
-   * 先算出彙總結果，不動工作表（給畫面預覽用）。
+   * 先算出匯總結果，不動工作表（給畫面預覽用）。
    *
    * o.dataStartRow  資料從第幾列開始
    * o.keyCol        料號在哪一行（用來判斷資料到第幾列、以及顯示前三大是誰）
@@ -1268,8 +1467,8 @@
    *   found       有沒有找到需求工時那一塊
    *   startCol / width   需求工時從哪一行開始、共幾行（幾個月）
    *   firstRow / lastRow 資料的第一列、最後一列
-   *   totalRow / topRow / restRow  三個彙總列的列號（最後一列資料之後空一列開始）
-   *   labelCol    彙總列的文字標籤放在哪一行（需求工時左邊那一行）
+   *   totalRow / topRow / restRow  三個匯總列的列號（最後一列資料之後空一列開始）
+   *   labelCol    匯總列的文字標籤放在哪一行（需求工時左邊那一行）
    *   months      [{ col, header, total, top, rest, error, topRows: [{ row, label, value }] }]
    *               topRows 只列數值大於 0 的
    */
@@ -1324,7 +1523,7 @@
   }
 
   /*
-   * 把彙總寫進工作表（最後一列資料之後空一列開始，共三列），每格都是公式：
+   * 把匯總寫進工作表（最後一列資料之後空一列開始，共三列），每格都是公式：
    *   Production 總需求工時   =SUM(N5:N74)
    *   Top 3 總需求工時        =LARGE(N5:N74,1)+LARGE(N5:N74,2)+LARGE(N5:N74,3)
    *   Others 總需求工時       =N76-N77          （Production − Top 3）
@@ -1348,11 +1547,14 @@
     var rows = [plan.totalRow, plan.topRow, plan.restRow];
     var texts = [o.labels.total, o.labels.top, o.labels.rest];
 
-    // 重做時，先把這三列原本的內容清掉
+    // 重做時，先把這三列原本的內容清掉。只清這一塊的行，同一列左邊可能有 MPS 的匯總。
     rows.forEach(function (r) {
       var row = main.findRow(r);
       if (!row) return;
-      eachStoredCell(row, function (cell) { cell.value = null; cell.style = {}; });
+      eachStoredCell(row, function (cell, c) {
+        if (c < leftCol || c > endCol) return;
+        cell.value = null; cell.style = {};
+      });
     });
 
     // 框線：最外圍粗線，裡面細線
@@ -1419,7 +1621,7 @@
     main.addConditionalFormatting({
       ref: firstL + plan.firstRow + ':' + lastL + plan.lastRow,
       rules: [{
-        type: 'expression', priority: 1,
+        type: 'expression', priority: nextPriority(main),
         formulae: ['AND(' + firstL + plan.firstRow + '>0,' + firstL + plan.firstRow + '>=LARGE(' +
           firstL + '$' + plan.firstRow + ':' + firstL + '$' + plan.lastRow + ',' + topN + '))'],
         style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: TOP_FILL_ARGB } } }
@@ -1438,12 +1640,12 @@
    * 先找出 RMA 區塊要放在哪裡，不動工作表。
    *
    * 參數和 planSummary 一樣，另外：
-   *   o.summaryMark   彙總第一列標籤裡一定會有的字（用來確認第 5 步做過了），例如 '總需求工時'
+   *   o.summaryMark   匯總第一列標籤裡一定會有的字（用來確認第 6 步做過了），例如 '總需求工時'
    *
    * 回傳：
    *   found       找不找得到放的位置；找不到時 reason = 'demand'（沒有需求工時）、
-   *               'rows'（沒有資料）、'summary'（還沒做彙總）
-   *   startRow    RMA 區塊的第一列（彙總最後一列之後空一列）
+   *               'rows'（沒有資料）、'summary'（還沒做匯總）
+   *   startRow    RMA 區塊的第一列（匯總最後一列之後空一列）
    *   labelCol    項目名稱放在哪一行（需求工時左邊那一行）
    *   ctCol       CT. 放在哪一行（項目名稱左邊那一行）
    *   startCol / width   各月從哪一行開始、共幾個月
@@ -1470,14 +1672,14 @@
   }
 
   /*
-   * 把 RMA 區塊寫進工作表（彙總下面空一列）：
+   * 把 RMA 區塊寫進工作表（匯總下面空一列）：
    *
    *   第一列   RMA總需求工時    =SUM(N81:N83)        底下各項目的合計
    *   項目列   項目名稱         =120*L81             這個月的重工數量 × 左邊那一格的 CT.
    *
    * 項目名稱左邊那一格放 CT.（數字），第一列的同一個位置寫「CT.」當作標題。
    * 數量是使用者在畫面上輸入的，直接寫在公式裡；之後在 Excel 改 CT. 那一格，工時會跟著變。
-   * 外觀和彙總那一塊一樣：外框粗線、裡面細格線；第一列的標籤置中，項目名稱靠左。
+   * 外觀和匯總那一塊一樣：外框粗線、裡面細格線；第一列的標籤置中，項目名稱靠左。
    * 第一列（RMA總需求工時）整列是淺藍色底（#A2D2FF），左邊的「CT.」標題不上色。
    *
    * o.items  = [{ name, ct, qty: [各月數量] }]
@@ -1493,10 +1695,14 @@
     var last = top + items.length;
     var endCol = plan.startCol + plan.width - 1;
 
-    // 重做時，把彙總下面原本的內容清掉（這一塊以下都是 RMA）
+    // 重做時，把匯總下面原本的內容清掉（這幾行從這一列以下都是 RMA）
+    var clearFrom = plan.ctCol || plan.labelCol;
     eachStoredRow(main, function (row, r) {
       if (r < top) return;
-      eachStoredCell(row, function (cell) { cell.value = null; cell.style = {}; });
+      eachStoredCell(row, function (cell, c) {
+        if (c < clearFrom || c > endCol) return;
+        cell.value = null; cell.style = {};
+      });
     });
 
     var THIN = { style: 'thin' }, THICK = { style: 'medium' };
@@ -1580,7 +1786,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 10,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 11,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,
@@ -1607,6 +1813,8 @@
     findHeaderColumn: findHeaderColumn,
     planDemand: planDemand,
     addDemandColumns: addDemandColumns,
+    planMpsTotals: planMpsTotals,
+    addMpsTotals: addMpsTotals,
     planSummary: planSummary,
     addSummaryRows: addSummaryRows,
     planRma: planRma,

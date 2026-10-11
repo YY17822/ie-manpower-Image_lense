@@ -1,5 +1,5 @@
 /*
- * 第 4 步：計算需求工時
+ * 第 5 步：計算需求工時
  *   把每個料號各月的計畫產量乘上該列的 CT.，算出六個月各自的需求工時。
  *   當月比較特別：要先加上當月 WIP 再乘 CT.。
  *
@@ -14,8 +14,8 @@
  *   預設的行（照第 1 步保留的順序）：第 4 行是 WIP，第 5 到第 10 行是當月和往後五個月。
  *
  *   來源有兩種：
- *     a. 剛才第 3 步做好的結果（不用先匯出，直接沿用）
- *     b. 上傳之前第 3 步匯出的檔案（MPS 工作表裡要有 CT. 這一行）
+ *     a. 剛才第 4 步做好的結果（不用先匯出，直接沿用）
+ *     b. 上傳之前第 4 步匯出的檔案（MPS 工作表裡要有 CT. 這一行）
  *
  * 做完之後把結果放在 IEApp.state.withDemand，下一步直接拿來用。
  */
@@ -27,7 +27,7 @@
   var ui = IEApp.ui;
   var h = IEApp.h;
 
-  var STORE_KEY = 'ie-manpower.step4';
+  var STORE_KEY = 'ie-manpower.step4';       // 鍵名是舊的步驟編號，改掉會讓記住的設定不見，所以沿用
   var STEP1_KEY = 'ie-manpower.step1';
   var REF_SHEET = 'P003';
   var CT_HEADER = 'CT.';
@@ -41,7 +41,7 @@
 
   // 這一步的狀態（切到別的步驟再回來時還在）
   var S = {
-    upload: null,         // 上傳的第 3 步檔案 { name, buffer }
+    upload: null,         // 上傳的第 4 步檔案 { name, buffer }
     preferUpload: false,
     work: null,           // 拿來預覽、統計的活頁簿 { src, loading, error, wb, main, mainExt }
     headerEdits: {}       // 使用者輸入的月份表頭 { 行號: 文字 }
@@ -50,40 +50,45 @@
   var els = {};
   var timer = null;
 
+  // WIP、月份的行和第 2 步（匯總）共用同一份設定；資料起始列是這一步自己的。
   function loadSettings() {
     var s = {};
     try { s = JSON.parse(localStorage.getItem(STORE_KEY) || '{}') || {}; } catch (e) { s = {}; }
-    var out = {};
-    Object.keys(DEFAULTS).forEach(function (k) { out[k] = s[k] === undefined ? DEFAULTS[k] : s[k]; });
-    return out;
+    var shared = ui.columns.get();
+    return {
+      wipCol: shared.wipCol,
+      monthCols: shared.monthCols,
+      startRow: s.startRow === undefined ? DEFAULTS.startRow : s.startRow
+    };
   }
   function saveSettings() {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(settings)); } catch (e) { /* 存不了就算了 */ }
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ startRow: settings.startRow })); } catch (e) { /* 存不了就算了 */ }
+    ui.columns.set({ wipCol: settings.wipCol, monthCols: settings.monthCols });
   }
 
   function isRefName(name) { return String(name).toLowerCase() === REF_SHEET.toLowerCase(); }
 
   function activeSource() {
-    var step3 = IEApp.state.withCT;
-    if (S.upload && (S.preferUpload || !step3)) return { kind: 'file', key: S.upload, name: S.upload.name };
-    if (step3) return { kind: 'step3', key: step3, name: step3.outName, step3: step3 };
+    var prev = IEApp.state.withCT;
+    if (S.upload && (S.preferUpload || !prev)) return { kind: 'file', key: S.upload, name: S.upload.name };
+    if (prev) return { kind: 'prev', key: prev, name: prev.outName, prev: prev };
     return null;
   }
 
   function buildFrom(src) {
-    return src.kind === 'step3' ? src.step3.build() : XIO.load(src.key.buffer.slice(0));
+    return src.kind === 'prev' ? src.prev.build() : XIO.load(src.key.buffer.slice(0));
   }
 
   function pickMain(wb, src) {
     var others = wb.worksheets.filter(function (w) { return !isRefName(w.name); });
-    var wanted = src.kind === 'step3' ? src.step3.mainSheet : null;
+    var wanted = src.kind === 'prev' ? src.prev.mainSheet : null;
     return others.filter(function (w) { return w.name === wanted; })[0] || others[0] || null;
   }
 
   // MPS 的資料從第幾列開始：接著前面的步驟做下來的話沿用第 1 步的設定
   function chainStartRow() {
     var src = activeSource();
-    return src && src.kind === 'step3' && src.step3.dataStartRow ? src.step3.dataStartRow : 0;
+    return src && src.kind === 'prev' && src.prev.dataStartRow ? src.prev.dataStartRow : 0;
   }
   function startRow() {
     var chain = chainStartRow();
@@ -105,17 +110,18 @@
   /* ---------- 畫面 ---------- */
   function render(panel) {
     els = {};
+    settings = loadSettings();        // 每次進來都重讀：第 2 步可能改過 WIP、月份的行
 
     els.srcInfo = h('p', { class: 'source-line', 'aria-live': 'polite' });
     els.drop = ui.fileDrop({
       id: 'f4-base',
-      title: '上傳第 3 步匯出的 Excel',
+      title: '上傳第 4 步匯出的 Excel',
       sub: '或把檔案拖進這裡。MPS 工作表裡要有 CT. 這一行',
       onFile: openUpload
     });
     els.switchBtn = h('button', { type: 'button', class: 'btn-link', hidden: true, onclick: switchSource });
     els.backBtn = h('button', {
-      type: 'button', class: 'btn-link', hidden: true, text: '回到第 3 步帶入 CT.',
+      type: 'button', class: 'btn-link', hidden: true, text: '回到第 4 步帶入 CT.',
       onclick: function () { IEApp.go('ct-lookup'); }
     });
     els.srcMsg = h('p', { class: 'msg is-error', role: 'alert', hidden: true });
@@ -137,7 +143,7 @@
     els.result = h('div', { class: 'sheet-area' });
     els.exportBtn = h('button', { type: 'button', class: 'btn-primary', disabled: true, text: '匯出 Excel', onclick: onExport });
     els.nextBtn = h('button', {
-      type: 'button', class: 'btn-secondary', disabled: true, text: '下一步：彙總',
+      type: 'button', class: 'btn-secondary', disabled: true, text: '下一步：需求工時匯總',
       onclick: function () { IEApp.go('summary'); }
     });
     els.exportNote = h('span', { class: 'export-note', 'aria-live': 'polite' });
@@ -148,7 +154,7 @@
 
     panel.appendChild(h('ol', { class: 'tasks' },
       h('li', { class: 'task' },
-        h('h2', { text: '第 3 步的 Excel' }),
+        h('h2', { text: '第 4 步的 Excel' }),
         els.srcInfo, els.drop.el,
         h('div', { class: 'link-row' }, els.switchBtn, els.backBtn),
         els.srcMsg),
@@ -158,7 +164,7 @@
           h('label', { for: 'f4-wip', text: '當月 WIP 在' }), els.wipCol,
           h('label', { for: 'f4-months', text: '各月產量在' }), els.monthCols,
           h('span', { class: 'field-label', text: 'CT. 在' }), els.ctInfo),
-        h('p', { class: 'hint', text: '各月產量的第一行是當月，會先加上 WIP 再乘 CT.；連續的行可以寫成 E:J，也可以點下面表格最上方的行號來選。' }),
+        h('p', { class: 'hint', text: '各月產量的第一行是當月，會先加上 WIP 再乘 CT.；連續的行可以寫成 E:J，也可以點下面表格最上方的行號來選。這裡的設定和第 2 步（匯總）共用。' }),
         els.mainPreview,
         h('details', { class: 'advanced' },
           h('summary', { text: '報表版面不一樣時' }),
@@ -202,7 +208,7 @@
     ui.readWorkbook(file)
       .then(function (res) {
         var others = res.workbook.worksheets.filter(function (w) { return !isRefName(w.name); });
-        if (!others.length) throw new Error('這個檔案沒有 MPS 工作表。請上傳第 3 步匯出的檔案。');
+        if (!others.length) throw new Error('這個檔案沒有 MPS 工作表。請上傳第 4 步匯出的檔案。');
         S.upload = { name: file.name, buffer: res.buffer };
         S.preferUpload = true;
         els.exportNote.textContent = '';
@@ -259,7 +265,7 @@
   // keepMonthText：使用者正在打字時不要改寫輸入框的內容
   function refresh(keepMonthText) {
     var src = activeSource();
-    var step3 = IEApp.state.withCT;
+    var prev = IEApp.state.withCT;
     IEApp.state.withDemand = null;
     els.exportBtn.disabled = true;
     els.nextBtn.disabled = true;
@@ -267,10 +273,10 @@
     els.result.textContent = '';
 
     if (!src) {
-      els.srcInfo.textContent = '還沒有第 3 步的結果。回到第 3 步帶入 CT.，或上傳之前匯出的檔案。';
+      els.srcInfo.textContent = '還沒有第 4 步的結果。回到第 4 步帶入 CT.，或上傳之前匯出的檔案。';
       els.drop.setIdle();
-    } else if (src.kind === 'step3') {
-      els.srcInfo.textContent = '沿用第 3 步剛做好的結果：' + step3.outName + '。不用先匯出；要改用之前匯出的檔案，再從下面上傳。';
+    } else if (src.kind === 'prev') {
+      els.srcInfo.textContent = '沿用第 4 步剛做好的結果：' + prev.outName + '。不用先匯出；要改用之前匯出的檔案，再從下面上傳。';
       if (S.upload) els.drop.setFile(S.upload.name, '已上傳，目前沒有使用。點這裡換一個檔案');
       else els.drop.setIdle();
     } else {
@@ -278,15 +284,15 @@
       els.drop.setFile(S.upload.name);
     }
     els.backBtn.hidden = !!src;
-    els.switchBtn.hidden = !(S.upload && step3);
-    if (src) els.switchBtn.textContent = src.kind === 'file' ? '改用第 3 步剛做好的結果' : '改用上傳的檔案';
+    els.switchBtn.hidden = !(S.upload && prev);
+    if (src) els.switchBtn.textContent = src.kind === 'file' ? '改用第 4 步剛做好的結果' : '改用上傳的檔案';
 
     var chain = chainStartRow();
     els.startRow.value = String(startRow());
     els.startRow.disabled = !!chain;
     els.startNote.textContent = chain ? '列開始（沿用第 1 步的設定）' : '列開始';
 
-    if (!src) { clearChoices(); setSummary('先準備好第 3 步的 Excel。'); return; }
+    if (!src) { clearChoices(); setSummary('先準備好第 4 步的 Excel。'); return; }
 
     ensureWork(src);
     var work = S.work;
@@ -326,7 +332,7 @@
     renderHeaderInputs(monthCols);
 
     if (!ctCol) {
-      setSummary('MPS 工作表裡找不到表頭是「CT.」的那一行。請先做第 3 步帶入 CT.。', true);
+      setSummary('MPS 工作表裡找不到表頭是「CT.」的那一行。請先做第 4 步帶入 CT.。', true);
       return;
     }
     if (parsed.bad.length) {
@@ -348,7 +354,7 @@
       return;
     }
 
-    var keyCol = src.kind === 'step3' && src.step3.keyCol ? src.step3.keyCol : 1;
+    var keyCol = src.kind === 'prev' && src.prev.keyCol ? src.prev.keyCol : 1;
     var opts = {
       dataStartRow: sr, keyCol: keyCol, wipCol: wipCol, monthCols: monthCols, ctCol: ctCol,
       title: TITLE, headers: headers
@@ -455,7 +461,7 @@
     if (plan.noCt) {
       var none = plan.rows.filter(function (it) { return it.noCt; }).map(function (it) { return it.label; });
       els.notes.appendChild(h('li', { class: 'is-warn' },
-        '有 ' + plan.noCt + ' 個料號沒有 CT.（第 3 步在 P003 找不到）：' + listText(none, 12) +
+        '有 ' + plan.noCt + ' 個料號沒有 CT.（第 4 步在 P003 找不到）：' + listText(none, 12) +
         '。這些列一樣會填公式，但需求工時會算成 0，並標上淺紅色底。'));
     }
     if (plan.errors) {
