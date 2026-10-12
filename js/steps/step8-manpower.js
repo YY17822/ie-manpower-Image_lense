@@ -128,6 +128,10 @@
     els.summary = h('p', { class: 'summary', 'aria-live': 'polite' });
     els.notes = h('ul', { class: 'notes' });
     els.exportBtn = h('button', { type: 'button', class: 'btn-primary', disabled: true, text: '匯出 Excel', onclick: onExport });
+    els.nextBtn = h('button', {
+      type: 'button', class: 'btn-secondary', disabled: true, text: '下一步：總表',
+      onclick: function () { IEApp.go('report'); }
+    });
     els.exportNote = h('span', { class: 'export-note', 'aria-live': 'polite' });
 
     panel.appendChild(h('div', { class: 'step-head' },
@@ -150,7 +154,7 @@
       h('li', { class: 'task' },
         h('h2', { text: '匯出' }),
         els.summary, els.notes,
-        h('div', { class: 'actions' }, els.exportBtn, els.exportNote))));
+        h('div', { class: 'actions' }, els.exportBtn, els.nextBtn, els.exportNote))));
 
     els.sheetSelect.addEventListener('change', function () {
       pickSheet(parseInt(els.sheetSelect.value, 10));
@@ -319,6 +323,7 @@
     var prev = previous();
     IEApp.state.withManpower = null;
     els.exportBtn.disabled = true;
+    els.nextBtn.disabled = true;
     els.notes.textContent = '';
     els.preview.textContent = '';
     els.check.textContent = '';
@@ -451,6 +456,7 @@
       build: function () { return buildWorkbook(src, sheet); }
     };
     saveSettings();       // 六個項目都選好了，記下來給下個月當預設值
+    els.nextBtn.disabled = false;
   }
 
   function setSummary(text, isError, isWarn) {

@@ -1920,6 +1920,175 @@
     return out;
   }
 
+  /* ---------- 總表：先建立表格的樣式和框線，內容之後再填 ---------- */
+
+  var REPORT_SHEET = '總表';
+  var REPORT = {
+    firstCol: 2,           // B：項目名稱
+    unitCol: 3,            // C：單位、子項目
+    monthCol: 4,           // D：第一個月
+    months: 6,             // D 到 I
+    noteCol: 10,           // J：備註
+    noteRow: 2,            // 第 2 列：法定加班上限
+    headRow: 3,            // 第 3 列：月份表頭
+    lastRow: 24
+  };
+  var REPORT_FONT = '微軟正黑體';
+  var REPORT_COLOR = {
+    red: 'FFFF0000',       // 法定加班上限
+    head: 'FF366092',      // 表頭深藍
+    section: 'FFDCE6F1',   // MPS (Production) 那一列
+    subtotal: 'FFEBF1DE',  // 小計
+    loading: 'FFFFCC99',   // Loading Rate
+    navy: 'FF000080',      // 人力相關的字
+    white: 'FFFFFFFF'
+  };
+  // 每一列：key 給之後填內容用；label 在 B，unit 在 C；merge = B、C 合併
+  var REPORT_ROWS = [
+    { row: 4, key: 'section', label: 'MPS (Production)', merge: true, section: true },
+    { row: 5, key: 'hoursTop3', label: '需求工時(Top 3)', unit: 'min/月' },
+    { row: 6, key: 'hoursNonTop3', label: '需求工時(Non-Top 3)', unit: 'min/月' },
+    { row: 7, key: 'hoursRework', label: '需求工時（重工）', unit: 'min/月' },
+    { row: 8, key: 'weekdays', label: '平日工作天數', unit: '天/月' },
+    { row: 9, key: 'holidays', label: '假日工作天數', unit: '天/月' },
+    { row: 10, key: 'workMinutes', label: '工作時間', unit: '分/天' },
+    { row: 11, key: 'overtimeMinutes', label: '加班時間', unit: '分/天' },
+    { row: 12, key: 'effTop3', label: '綜合效率%（Top-3 機種）', merge: true },
+    { row: 13, key: 'effNonTop3', label: '綜合效率%（Non-Top 3 機種）', merge: true },
+    { row: 14, key: 'attendance', label: '出勤率%', merge: true },
+    { row: 15, key: 'needOnline', group: '需求人力', unit: 'On line', navy: true },
+    { row: 16, key: 'needOffDirect', unit: 'Off line_直接', navy: true },
+    { row: 17, key: 'needOffIndirect', unit: 'Off line_間接', navy: true },
+    { row: 18, key: 'needSubtotal', unit: '小計', navy: true, subtotal: true },
+    { row: 19, key: 'haveOnline', group: '現有人力\n(早+夜)', unit: 'On line', navy: true },
+    { row: 20, key: 'haveOffDirect', unit: 'Off line_直接', navy: true },
+    { row: 21, key: 'haveOffIndirect', unit: 'Off line_間接', navy: true },
+    { row: 22, key: 'haveSubtotal', unit: '小計(on+off)', navy: true, subtotal: true },
+    { row: 23, key: 'gap', label: '人力需求差異(現有-需求)', merge: true, navy: true },
+    { row: 24, key: 'loading', label: 'Loading Rate%(含加班)', merge: true, navy: true, loading: true }
+  ];
+
+  function solid(argb) { return { type: 'pattern', pattern: 'solid', fgColor: { argb: argb } }; }
+
+  /*
+   * 在活頁簿裡建立「總表」工作表（已經有的話先刪掉重建）。
+   * o.monthRefs  各月表頭要參照的儲存格 [{ sheet: 'MPS', col: 14, row: 3, text: 'Oct' }]；
+   *              有給的話表頭填公式（例如 ='MPS'!N3），沒給的那幾格留空白
+   * 回傳 { worksheet, rows: { hoursTop3: 5, … }, monthCol, months }
+   */
+  function addReportSheet(wb, o) {
+    o = o || {};
+    wb.worksheets
+      .filter(function (w) { return sameSheetName(w.name, REPORT_SHEET); })
+      .forEach(function (w) { wb.removeWorksheet(w.id); });
+    var ws = wb.addWorksheet(REPORT_SHEET);
+    var R = REPORT;
+    var C = REPORT_COLOR;
+    var lastMonth = R.monthCol + R.months - 1;
+    var THIN = { style: 'thin' }, THICK = { style: 'medium' };
+
+    // 行寬、列高
+    ws.getColumn(1).width = 6;
+    ws.getColumn(R.firstCol).width = 24;
+    ws.getColumn(R.unitCol).width = 17;    // 要放得下「Off line_直接」「小計(on+off)」，不然字會跑到 D 行
+    for (var mc = R.monthCol; mc <= lastMonth; mc++) ws.getColumn(mc).width = 10;
+    ws.getColumn(R.noteCol).width = 56;
+    // 表格外的空白格子也設成微軟正黑體，之後在旁邊打字字型才一致
+    for (var fc = 1; fc <= R.noteCol + 1; fc++) ws.getColumn(fc).font = font();
+    for (var fr = 1; fr <= R.lastRow + 1; fr++) {
+      for (fc = 1; fc <= R.noteCol + 1; fc++) ws.getCell(fr, fc).font = font();
+    }
+    ws.getRow(R.noteRow).height = 24;
+    ws.getRow(R.headRow).height = 21;
+    for (var hr = R.headRow + 1; hr <= R.lastRow; hr++) ws.getRow(hr).height = 18;
+
+    // 外框粗線、裡面細線；Loading Rate 那一列上面也是粗線
+    function border(r, c) {
+      return {
+        top: r === R.headRow || r === R.lastRow ? THICK : THIN,
+        bottom: r === R.lastRow || r === R.lastRow - 1 ? THICK : THIN,
+        left: c === R.firstCol ? THICK : THIN,
+        right: c === R.noteCol ? THICK : THIN
+      };
+    }
+    // 整張總表都用微軟正黑體（charset 136 = 繁體中文）
+    function font(extra) { return Object.assign({ name: REPORT_FONT, size: 12, charset: 136 }, extra); }
+    var LEFT = { horizontal: 'left', vertical: 'middle' };
+    var CENTER = { horizontal: 'center', vertical: 'middle' };
+
+    // 第 2 列：法定加班上限（紅底白字，B、C 合併）
+    var note = ws.getCell(R.noteRow, R.firstCol);
+    note.value = '法定加班上限46hr/人';
+    ws.mergeCells(R.noteRow, R.firstCol, R.noteRow, R.unitCol);
+    ws.getCell(R.noteRow, R.firstCol).style = {
+      font: font({ bold: true, color: { argb: C.white } }), fill: solid(C.red), alignment: LEFT
+    };
+    ws.getCell(R.noteRow, R.unitCol).style = { font: font(), fill: solid(C.red) };
+
+    // 第 3 列：表頭（深藍底白字；B、C 合併，畫一條斜線）
+    for (var c = R.firstCol; c <= R.noteCol; c++) {
+      var b = border(R.headRow, c);
+      if (c <= R.unitCol) b.diagonal = { up: false, down: true, style: 'medium', color: { argb: 'FF000000' } };
+      ws.getCell(R.headRow, c).style = {
+        font: font({ size: 14, bold: true, color: { argb: C.white } }),
+        fill: solid(C.head), alignment: CENTER, border: b
+      };
+    }
+    ws.mergeCellsWithoutStyle(R.headRow, R.firstCol, R.headRow, R.unitCol);
+    var refs = o.monthRefs || [];
+    for (var i = 0; i < R.months; i++) {
+      var ref = refs[i];
+      if (ref && ref.sheet && ref.col && ref.row) {
+        ws.getCell(R.headRow, R.monthCol + i).value = {
+          formula: sheetRef(ref.sheet) + numToCol(ref.col) + ref.row,
+          result: ref.text || ''
+        };
+      }
+    }
+    ws.getCell(R.headRow, R.noteCol).value = '備註';
+
+    // 第 4 到 24 列
+    var rows = {};
+    var groupTop = 0;
+    REPORT_ROWS.forEach(function (d, k) {
+      rows[d.key] = d.row;
+      var fill = d.section ? solid(C.section) : d.loading ? solid(C.loading) : null;
+      var color = d.navy ? { argb: C.navy } : undefined;
+      for (var c = R.firstCol; c <= R.noteCol; c++) {
+        var f = fill;
+        if (d.subtotal && c >= R.unitCol) f = solid(C.subtotal);
+        var st = { border: border(d.row, c), alignment: c <= R.unitCol ? LEFT : CENTER, font: font({ color: color }) };
+        if (f) st.fill = f;
+        if (c <= R.unitCol) st.font = font({ bold: true, color: color, size: d.section ? 14 : 12 });
+        ws.getCell(d.row, c).style = st;
+      }
+      if (d.label) ws.getCell(d.row, R.firstCol).value = d.label;
+      if (d.unit) ws.getCell(d.row, R.unitCol).value = d.unit;
+      if (d.merge) ws.mergeCellsWithoutStyle(d.row, R.firstCol, d.row, R.unitCol);
+
+      // 需求人力、現有人力：B 行往下合併到這一組的最後一列
+      if (d.group) {
+        groupTop = d.row;
+        var g = ws.getCell(d.row, R.firstCol);
+        g.value = d.group;
+        g.style = Object.assign({}, g.style, {
+          font: font({ color: color }),
+          alignment: { horizontal: 'left', vertical: 'middle', wrapText: true }
+        });
+      }
+      var nextRow = REPORT_ROWS[k + 1];
+      if (groupTop && (!nextRow || nextRow.group || !nextRow.unit || nextRow.label)) {
+        if (d.row > groupTop) ws.mergeCellsWithoutStyle(groupTop, R.firstCol, d.row, R.firstCol);
+        groupTop = 0;
+      }
+    });
+
+    wb.calcProperties = Object.assign({}, wb.calcProperties, { fullCalcOnLoad: true });
+    return { worksheet: ws, rows: rows, monthCol: R.monthCol, months: R.months };
+  }
+
+  function sameSheetName(a, b) { return String(a).toLowerCase() === String(b).toLowerCase(); }
+
   function toBlob(workbook) {
     return workbook.xlsx.writeBuffer().then(function (buf) {
       return new Blob([buf], {
@@ -1929,7 +2098,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 12,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 14,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,
@@ -1968,6 +2137,10 @@
     guessFirstMonthCol: guessFirstMonthCol,
     labelsAbove: labelsAbove,
     readManpower: readManpower,
+    REPORT_SHEET: REPORT_SHEET,
+    REPORT: REPORT,
+    REPORT_ROWS: REPORT_ROWS,
+    addReportSheet: addReportSheet,
     toNumber: toNumber,
     toBlob: toBlob
   };
