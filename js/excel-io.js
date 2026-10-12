@@ -1777,6 +1777,149 @@
     return plan;
   }
 
+  /* ---------- 人力報表：各項目在哪一列、當月在哪一行 ---------- */
+
+  // 之後總表要抓的六個項目。key 是程式裡用的名字，label 是畫面上顯示的文字。
+  var MANPOWER_ITEMS = [
+    { key: 'online', label: 'Online' },
+    { key: 'onlineProd', label: 'Online（生產）' },
+    { key: 'onlineRework', label: 'Online（重工）' },
+    { key: 'offDirect', label: 'Off line（直接）' },
+    { key: 'offIndirect', label: 'Off line（間接）' },
+    { key: 'ttl', label: 'TTL（On + Off直接）' }
+  ];
+
+  // 比對列標題用：全形轉半形、轉小寫、去掉空白和連字號（Off line、Off-line、OFFLINE 都一樣）
+  function labelKey(text) {
+    return normalizeText(text).toLowerCase().replace(/[\s\-_]/g, '');
+  }
+
+  /*
+   * 列出人力報表每一列的文字，給使用者選「這個項目在第幾列」。
+   * 回傳 [{ row, text, key }]，只列有內容的列：
+   *   text  這一列的文字（數字不算；合併儲存格用左上角的字），最多取前三段
+   *   key   比對用（labelKey 處理過的 text）
+   */
+  function manpowerRows(ws, ext) {
+    var out = [];
+    for (var r = 1; r <= ext.lastRow; r++) {
+      var row = ws.findRow(r);
+      if (!row) continue;
+      var parts = [];
+      var any = false;
+      for (var c = 1; c <= ext.colCount; c++) {
+        var cell = row.findCell(c);
+        if (!cell) continue;
+        var v = plainValue(cellRawValue(cell));
+        if (v === null || v === undefined || v === '') continue;
+        any = true;
+        if (typeof v !== 'string') continue;
+        var t = normalizeText(v).replace(/\s+/g, ' ');
+        var asNumber = toNumber(t);
+        if (t === '' || (asNumber !== null && !isNaN(asNumber))) continue;   // 文字型態的數字不算標題
+        if (parts.indexOf(t) < 0 && parts.length < 3) parts.push(t);
+      }
+      if (!any) continue;
+      var text = parts.join(' ');
+      out.push({ row: r, text: text, key: labelKey(text) });
+    }
+    return out;
+  }
+
+  // 依列標題猜六個項目各在哪一列。回傳 { online: 5, onlineProd: 6, … }，猜不到的是 0。
+  function guessManpowerRows(rows) {
+    function has(k, word) { return k.indexOf(word) >= 0; }
+    function isTotal(k) { return has(k, 'ttl') || has(k, 'total') || has(k, '+'); }
+    var tests = {
+      online: [
+        function (k) { return k === 'online'; },
+        function (k) { return has(k, 'online') && !has(k, '生產') && !has(k, '重工') && !has(k, 'off') && !isTotal(k); }
+      ],
+      onlineProd: [function (k) { return has(k, 'online') && has(k, '生產') && !has(k, 'off') && !isTotal(k); }],
+      onlineRework: [function (k) { return has(k, 'online') && has(k, '重工') && !has(k, 'off') && !isTotal(k); }],
+      offDirect: [function (k) { return has(k, 'offline') && has(k, '直接') && !has(k, '間接') && !isTotal(k); }],
+      offIndirect: [function (k) { return has(k, 'offline') && has(k, '間接') && !isTotal(k); }],
+      ttl: [
+        function (k) { return (has(k, 'ttl') || has(k, 'total')) && has(k, 'on') && has(k, 'off'); },
+        function (k) { return has(k, 'ttl'); }
+      ]
+    };
+    var found = {};
+    MANPOWER_ITEMS.forEach(function (item) {
+      found[item.key] = 0;
+      tests[item.key].some(function (test) {
+        var hit = rows.filter(function (x) { return x.key !== '' && test(x.key); })[0];
+        if (hit) found[item.key] = hit.row;
+        return !!hit;
+      });
+    });
+    return found;
+  }
+
+  // 第 r 列裡是數字的行（由左到右）
+  function numericColumns(ws, r, colCount) {
+    var cols = [];
+    var row = ws.findRow(r);
+    if (!row) return cols;
+    for (var c = 1; c <= colCount; c++) {
+      var n = toNumber(cellRawValue(row.findCell(c)));
+      if (n !== null && !isNaN(n)) cols.push(c);
+    }
+    return cols;
+  }
+
+  // 猜當月在哪一行：把選好的各列裡是數字的行合在一起，剛好是 months 個連續的行時取第一個；
+  // 其他情況（例如連過去的月份也列出來）不猜，回傳 0，讓使用者自己選。
+  function guessFirstMonthCol(ws, rows, colCount, months) {
+    var seen = {};
+    rows.forEach(function (r) {
+      numericColumns(ws, r, colCount).forEach(function (c) { seen[c] = true; });
+    });
+    var cols = Object.keys(seen).map(Number).sort(function (x, y) { return x - y; });
+    if (cols.length !== months) return 0;
+    return cols[cols.length - 1] - cols[0] === months - 1 ? cols[0] : 0;
+  }
+
+  // 每一行的表頭文字：從 aboveRow 的上一列往上找，第一個有內容的格子。回傳 labels[行號]
+  function labelsAbove(ws, aboveRow, colCount) {
+    var labels = [];
+    for (var c = 1; c <= colCount; c++) {
+      labels[c] = '';
+      for (var r = aboveRow - 1; r >= 1; r--) {
+        var row = ws.findRow(r);
+        var cell = row ? row.findCell(c) : null;
+        var t = cell ? normalizeText(displayText(cell)).replace(/\s+/g, ' ') : '';
+        if (t !== '') { labels[c] = t; break; }
+      }
+    }
+    return labels;
+  }
+
+  /*
+   * 依使用者選的列和行，把之後總表要抓的數值讀出來給畫面核對。
+   *   rows      { online: 5, … }
+   *   firstCol  當月在哪一行
+   *   months    幾個月
+   * 回傳 { cols: [行號…], values: { online: [{ text, number, blank, bad }…], … }, blank, bad }
+   */
+  function readManpower(ws, rows, firstCol, months) {
+    var out = { cols: [], values: {}, blank: 0, bad: 0 };
+    for (var i = 0; i < months; i++) out.cols.push(firstCol + i);
+    MANPOWER_ITEMS.forEach(function (item) {
+      var r = rows[item.key];
+      var row = r ? ws.findRow(r) : null;
+      out.values[item.key] = out.cols.map(function (c) {
+        var cell = row ? row.findCell(c) : null;
+        var n = toNumber(cellRawValue(cell));
+        var info = { text: cell ? displayText(cell) : '', number: n, blank: n === null, bad: n !== null && isNaN(n) };
+        if (info.blank) out.blank++;
+        if (info.bad) out.bad++;
+        return info;
+      });
+    });
+    return out;
+  }
+
   function toBlob(workbook) {
     return workbook.xlsx.writeBuffer().then(function (buf) {
       return new Blob([buf], {
@@ -1786,7 +1929,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 11,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 12,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,
@@ -1819,6 +1962,12 @@
     addSummaryRows: addSummaryRows,
     planRma: planRma,
     addRmaRows: addRmaRows,
+    MANPOWER_ITEMS: MANPOWER_ITEMS,
+    manpowerRows: manpowerRows,
+    guessManpowerRows: guessManpowerRows,
+    guessFirstMonthCol: guessFirstMonthCol,
+    labelsAbove: labelsAbove,
+    readManpower: readManpower,
     toNumber: toNumber,
     toBlob: toBlob
   };

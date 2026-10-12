@@ -85,6 +85,7 @@
    * o.rows        表頭之後顯示幾列（預設 8）
    * o.caption     表格上方的說明文字
    * o.keep        { 行號: true }，要用螢光筆標示的行（可省略）
+   * o.keepRows    { 列號: true }，要標示的列（可省略）。有給的話，只有「標示的列 × 標示的行」交叉的格子畫螢光
    * o.onToggle    點行號時呼叫（可省略；有給的話行號會變成按鈕）
    * o.selectorCol / o.wanted  用來把不符合條件的列變淡（可省略）
    */
@@ -94,6 +95,7 @@
     var lastShown = Math.min(o.lastRow, o.headerEnd + rows);
     var colCount = o.colCount;
     var keep = o.keep || {};
+    var keepRows = o.keepRows || null;
 
     // 合併儲存格 -> colspan / rowspan
     var span = {};
@@ -134,7 +136,7 @@
         out = !(k !== '' && o.wanted[k]);
       }
       var tr = h('tr', { class: (isHeader ? 'is-header' : '') + (out ? ' is-out' : '') },
-        h('th', { class: 'rowhead', scope: 'row', text: String(r) }));
+        h('th', { class: 'rowhead' + (keepRows && keepRows[r] ? ' is-kept' : ''), scope: 'row', text: String(r) }));
       for (c = 1; c <= colCount; c++) {
         if (covered[r + ':' + c]) continue;
         var cell = row ? row.findCell(c) : null;
@@ -143,6 +145,7 @@
         var width = sp ? sp.cols : 1;
         var keptCount = 0;
         for (var cc = c; cc < c + width; cc++) if (keep[cc]) keptCount++;
+        if (keepRows && !keepRows[r]) keptCount = 0;
         var raw = XIO.plainValue(valueOf(cell));
         var cls = (keptCount === width ? 'is-kept' : keptCount ? 'is-part' : '') +
           (typeof raw === 'number' ? ' is-num' : '') + (sp ? ' is-merged' : '') + (width > 6 ? ' is-wide' : '');

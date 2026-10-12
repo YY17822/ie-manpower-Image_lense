@@ -238,6 +238,7 @@ button.step:hover { background: rgba(11, 110, 105, 0.07); }
 .sheet .colhead button:focus-visible { outline-offset: -3px; }
 .sheet .colhead:not(:has(button)) { padding: 0.375rem 0.5rem; }
 .sheet .colhead.is-kept { background: var(--mark-strong); color: var(--ink); font-weight: 700; }
+.sheet .rowhead.is-kept { background: var(--mark-strong); color: var(--ink); font-weight: 700; }
 
 /* 表頭列 */
 .sheet tr.is-header td { background: #F3F6F5; font-weight: 700; text-align: center; }
@@ -256,6 +257,8 @@ button.step:hover { background: rgba(11, 110, 105, 0.07); }
 .sheet.is-result .colhead { padding: 0.375rem 0.625rem; white-space: nowrap; }
 .sheet.is-result tr.is-missing td { background: #FFD9D9; }
 .sheet.is-result td.is-top { background: #FFD8A8; }
+.sheet.is-result td.is-missing { background: #FFD9D9; }   /* 人力核對表：空白或不是數字的格子 */
+.sheet.is-check .rowhead { text-align: left; padding: 0.25rem 0.625rem; }
 .sheet.is-result td.is-total { background: #B5E48C; }   /* 和 Excel 裡 Total 那一列的淺綠色一樣 */   /* 和 Excel 裡前三大的淺橘色一樣 */
 .sheet.is-tops td { text-align: left; }
 .sheet.is-tops .top-name { display: block; font-weight: 700; }

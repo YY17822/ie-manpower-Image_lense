@@ -17,7 +17,7 @@
  *     a. 剛才第 6 步做好的結果（不用先匯出，直接沿用）
  *     b. 上傳之前第 6 步匯出的檔案（MPS 工作表裡要有匯總那三列）
  *
- * 做完之後把結果放在 IEApp.state.withRma，下一步直接拿來用。
+ * 做完之後把結果放在 IEApp.state.withRma，下一步（第 8 步匯入人力報表）直接拿來用。
  */
 (function (global) {
   'use strict';
@@ -143,6 +143,10 @@
     els.summary = h('p', { class: 'summary', 'aria-live': 'polite' });
     els.result = h('div', { class: 'sheet-area' });
     els.exportBtn = h('button', { type: 'button', class: 'btn-primary', disabled: true, text: '匯出 Excel', onclick: onExport });
+    els.nextBtn = h('button', {
+      type: 'button', class: 'btn-secondary', disabled: true, text: '下一步：匯入人力報表',
+      onclick: function () { IEApp.go('manpower'); }
+    });
     els.exportNote = h('span', { class: 'export-note', 'aria-live': 'polite' });
 
     panel.appendChild(h('div', { class: 'step-head' },
@@ -167,7 +171,7 @@
       h('li', { class: 'task' },
         h('h2', { text: '匯出' }),
         els.summary, els.result,
-        h('div', { class: 'actions' }, els.exportBtn, els.exportNote))));
+        h('div', { class: 'actions' }, els.exportBtn, els.nextBtn, els.exportNote))));
 
     els.startRow.addEventListener('change', function () {
       settings.startRow = els.startRow.value;
@@ -328,6 +332,7 @@
     var prev = IEApp.state.withSummary;
     IEApp.state.withRma = null;
     els.exportBtn.disabled = true;
+    els.nextBtn.disabled = true;
     els.result.textContent = '';
 
     if (!src) {
@@ -410,6 +415,7 @@
       rmaLastRow: last,
       build: function () { return buildWorkbook(src, opts); }
     };
+    els.nextBtn.disabled = false;
   }
 
   function setSummary(text, isError, isWarn) {
