@@ -15,6 +15,13 @@
  *
  *   月份表頭用公式參照 MPS 工作表「需求工時」的月份（第 5 步輸入的），例如 ='MPS'!N3。
  *
+ *   已經填好的列（都是公式，參照 MPS 工作表；用標籤文字找出是哪一列）：
+ *     MPS (Production)      ← 第 2 步匯總的「Total」那一列（當月已含 WIP），例如 ='MPS'!E76
+ *     需求工時(Top 3)        ← 「Top 3 總需求工時」那一列，例如 ='MPS'!N77
+ *     需求工時(Non-Top 3)    ← 「Others 總需求工時」那一列
+ *     需求工時（重工）        ← 「RMA總需求工時」那一列
+ *   其他列之後再補。
+ *
  *   來源有兩種：
  *     a. 剛才第 8 步做好的結果（不用先匯出，直接沿用）
  *     b. 上傳之前第 8 步匯出的檔案
@@ -90,6 +97,13 @@
     return refs;
   }
 
+  // findReportLinks 的結果 → addReportSheet 要的 { key: refs }
+  function linkRefs(links) {
+    var out = {};
+    Object.keys(links).forEach(function (k) { if (links[k].found) out[k] = links[k].refs; });
+    return out;
+  }
+
   /* ---------- 畫面 ---------- */
   function render(panel) {
     els = {};
@@ -110,13 +124,14 @@
 
     els.summary = h('p', { class: 'summary', 'aria-live': 'polite' });
     els.notes = h('ul', { class: 'notes' });
+    els.result = h('div', { class: 'sheet-area' });
     els.preview = h('div', { class: 'sheet-area' });
     els.exportBtn = h('button', { type: 'button', class: 'btn-primary', disabled: true, text: '匯出 Excel', onclick: onExport });
     els.exportNote = h('span', { class: 'export-note', 'aria-live': 'polite' });
 
     panel.appendChild(h('div', { class: 'step-head' },
       h('h1', { text: '總表' }),
-      h('p', { text: '在同一個檔案裡新增「總表」工作表。這一版先建立表格的樣式、格式和外框格線，各格的內容之後再補上。' })));
+      h('p', { text: '在同一個檔案裡新增「總表」工作表，並用公式從 MPS 工作表抓 MPS (Production) 和三列需求工時。其他列之後再補上。' })));
 
     panel.appendChild(h('ol', { class: 'tasks' },
       h('li', { class: 'task' },
@@ -126,7 +141,7 @@
         els.srcMsg),
       h('li', { class: 'task' },
         h('h2', { text: '總表' }),
-        els.summary, els.notes, els.preview,
+        els.summary, els.notes, els.result, els.preview,
         h('div', { class: 'actions' }, els.exportBtn, els.exportNote))));
 
     refresh();
@@ -171,7 +186,8 @@
       if (!main) throw new Error('找不到 MPS 工作表。');
       var refs = monthRefs(main, src);
       work.refs = refs;
-      work.report = XIO.addReportSheet(wb, { monthRefs: refs || [] });
+      work.links = XIO.findReportLinks(main, { dataStartRow: dataStartRow(src), months: XIO.REPORT.months });
+      work.report = XIO.addReportSheet(wb, { monthRefs: refs || [], links: linkRefs(work.links) });
       work.wb = wb;
       work.main = main;
       work.loading = false;
@@ -191,6 +207,7 @@
     IEApp.state.withReport = null;
     els.exportBtn.disabled = true;
     els.notes.textContent = '';
+    els.result.textContent = '';
     els.preview.textContent = '';
 
     if (!src) {
@@ -218,7 +235,7 @@
     var names = work.wb.worksheets.map(function (w) { return w.name; });
     var replacing = src.kind === 'file' && S.upload.sheets.some(function (n) { return sameName(n, SHEET_NAME); });
     var text = '匯出的檔案有 ' + names.length + ' 個工作表：' + names.join('、') + '。「' + SHEET_NAME +
-      '」目前只有表格的樣式和框線，內容之後再補。';
+      '」已經填好 MPS (Production) 和三列需求工時，其他列之後再補。';
     if (replacing) text += ' 檔案裡原本的「' + SHEET_NAME + '」工作表會重新建立。';
     setSummary(text, false, replacing);
 
@@ -231,6 +248,9 @@
         work.main.name + ' 工作表裡找不到「需求工時」的月份，總表的月份表頭先留空白。'));
     }
 
+    var warn = renderLinks(work);
+    if (warn) els.summary.className = 'summary is-warn';
+
     ui.renderSheet(els.preview, ws, {
       headerEnd: XIO.REPORT.headRow,
       lastRow: XIO.REPORT.lastRow,
@@ -241,6 +261,7 @@
 
     els.exportBtn.disabled = false;
     var refs = work.refs || [];
+    var links = linkRefs(work.links);
     IEApp.state.withReport = {
       outName: outputName(src),
       mainSheet: work.main.name,
@@ -248,8 +269,67 @@
       reportRows: work.report.rows,
       monthCol: work.report.monthCol,
       monthCount: work.report.months,
-      build: function () { return buildWorkbook(src, refs); }
+      build: function () { return buildWorkbook(src, refs, links); }
     };
+  }
+
+  // 各列從哪裡抓、抓到的數值；有找不到的回傳 true
+  function renderLinks(work) {
+    var months = XIO.REPORT.months;
+    var rowLabel = {};
+    XIO.REPORT_ROWS.forEach(function (d) { rowLabel[d.key] = d.label; });
+    var warn = false;
+
+    var head = h('tr', null,
+      h('th', { class: 'colhead', scope: 'col', text: '總表' }),
+      h('th', { class: 'colhead', scope: 'col', text: '來源（' + work.main.name + ' 工作表）' }));
+    for (var i = 0; i < months; i++) {
+      var r = work.refs && work.refs[i];
+      head.appendChild(h('th', { class: 'colhead', scope: 'col',
+        text: XIO.numToCol(XIO.REPORT.monthCol + i) + (r && r.text ? '　' + r.text : '') }));
+    }
+    var body = h('tbody');
+    XIO.REPORT_LINKS.forEach(function (link) {
+      var info = work.links[link.key];
+      var src;
+      if (!info.found) {
+        warn = true;
+        src = '找不到「' + link.label + '」';
+        els.notes.appendChild(h('li', { class: 'is-warn' }, rowLabel[link.key] + '：' + work.main.name +
+          ' 工作表裡找不到「' + link.label + '」這一列（第 ' + link.step + ' 步做的），這一列先留空白。'));
+      } else {
+        var first = info.refs[0], last = info.refs[info.refs.length - 1];
+        src = '「' + link.label + '」第 ' + info.row + ' 列' +
+          (first ? '，' + XIO.numToCol(first.col) + ' 到 ' + XIO.numToCol(last.col) + ' 行' : '');
+        if (info.refs.length < months) {
+          warn = true;
+          els.notes.appendChild(h('li', { class: 'is-warn' }, rowLabel[link.key] + '：「' + link.label + '」那一列只找到 ' +
+            info.refs.length + ' 個月的數值，其餘留空白。'));
+        }
+      }
+      var tr = h('tr', null,
+        h('th', { class: 'rowhead', scope: 'row', text: rowLabel[link.key] }),
+        h('td', { text: src }));
+      for (var m = 0; m < months; m++) {
+        var ref = info.refs[m];
+        tr.appendChild(h('td', {
+          class: ref ? 'is-num' : 'is-missing',
+          text: ref ? (ref.value === null ? '（重新計算後才有）' : Math.round(ref.value).toLocaleString('en-US')) : ''
+        }));
+      }
+      body.appendChild(tr);
+    });
+
+    var ex = work.links.section.found && work.links.section.refs[0];
+    els.result.textContent = '';
+    els.result.appendChild(h('p', { class: 'sheet-caption', text: '已經填好的列（數值只顯示整數）：' }));
+    els.result.appendChild(h('div', { class: 'sheet-scroll', tabindex: '0', role: 'group', 'aria-label': '總表已填的列' },
+      h('table', { class: 'sheet is-result is-check' }, h('thead', null, head), body)));
+    if (ex) {
+      els.result.appendChild(h('p', { class: 'hint', text: '每格都是公式，例如總表 D' + XIO.REPORT_ROWS[0].row + ' ＝ =\'' +
+        ex.sheet + "'!" + XIO.numToCol(ex.col) + ex.row + '。' }));
+    }
+    return warn;
   }
 
   function setSummary(text, isError, isWarn) {
@@ -258,9 +338,9 @@
   }
 
   /* ---------- 產生活頁簿 ---------- */
-  function buildWorkbook(src, refs) {
+  function buildWorkbook(src, refs, links) {
     return buildFrom(src).then(function (wb) {
-      XIO.addReportSheet(wb, { monthRefs: refs });
+      XIO.addReportSheet(wb, { monthRefs: refs, links: links });
       return wb;
     });
   }

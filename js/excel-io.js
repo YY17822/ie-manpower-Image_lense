@@ -1968,12 +1968,74 @@
     { row: 24, key: 'loading', label: 'Loading Rate%(含加班)', merge: true, navy: true, loading: true }
   ];
 
+  /*
+   * 總表各列要從 MPS 工作表哪一列抓數值：用列的文字標籤找。
+   *   Total               第 2 步匯總（當月已含 WIP）
+   *   Top 3 總需求工時     第 6 步
+   *   Others 總需求工時    第 6 步
+   *   RMA總需求工時        第 7 步
+   */
+  var REPORT_LINKS = [
+    { key: 'section', label: 'Total', step: 2 },
+    { key: 'hoursTop3', label: 'Top 3 總需求工時', step: 6 },
+    { key: 'hoursNonTop3', label: 'Others 總需求工時', step: 6 },
+    { key: 'hoursRework', label: 'RMA總需求工時', step: 7 }
+  ];
+
+  function labelMatchKey(v) {
+    return normalizeText(v).replace(/\s+/g, ' ').toLowerCase();
+  }
+
+  /*
+   * 在 MPS 工作表找出總表各列的來源。
+   *   o.dataStartRow  資料從第幾列開始（標籤只在這一列以下找，避免找到表頭的字）
+   *   o.months        幾個月（6）
+   * 回傳 { section: { found, row, labelCol, refs: [{ sheet, col, row, value }] }, … }
+   * 數值是標籤右邊的格子，由左往右取 months 個（空白略過，碰到文字就停）。
+   * 同一個標籤出現很多次時，取最下面那一個（匯總都在資料的下面）。
+   */
+  function findReportLinks(main, o) {
+    var ext = extent(main);
+    var out = {};
+    REPORT_LINKS.forEach(function (link) {
+      var want = labelMatchKey(link.label);
+      var hit = null;
+      eachStoredRow(main, function (row, r) {
+        if (r < (o.dataStartRow || 1)) return;
+        eachStoredCell(row, function (cell, c) {
+          if (cell.isMerged && cell.master !== cell) return;
+          var v = plainValue(cellRawValue(cell));
+          if (typeof v === 'string' && labelMatchKey(v) === want) hit = { row: r, col: c };
+        });
+      });
+      if (!hit) { out[link.key] = { found: false, label: link.label, step: link.step, refs: [] }; return; }
+      var refs = [];
+      var row = main.findRow(hit.row);
+      for (var c = hit.col + 1; c <= ext.colCount && refs.length < o.months; c++) {
+        var cell = row.findCell(c);
+        var raw = cell ? cellRawValue(cell) : null;
+        var v = plainValue(raw);
+        if (v === null || v === undefined || v === '') {
+          var isFormula = raw && typeof raw === 'object' && (raw.formula !== undefined || raw.sharedFormula !== undefined);
+          if (!isFormula) { if (refs.length) break; else continue; }
+        }
+        if (typeof v === 'string' && isNaN(toNumber(v))) break;
+        var n = toNumber(v);
+        refs.push({ sheet: main.name, col: c, row: hit.row, value: n === null || isNaN(n) ? null : n });
+      }
+      out[link.key] = { found: true, label: link.label, step: link.step, row: hit.row, labelCol: hit.col, refs: refs };
+    });
+    return out;
+  }
+
   function solid(argb) { return { type: 'pattern', pattern: 'solid', fgColor: { argb: argb } }; }
 
   /*
    * 在活頁簿裡建立「總表」工作表（已經有的話先刪掉重建）。
    * o.monthRefs  各月表頭要參照的儲存格 [{ sheet: 'MPS', col: 14, row: 3, text: 'Oct' }]；
    *              有給的話表頭填公式（例如 ='MPS'!N3），沒給的那幾格留空白
+   * o.links      各列要抓的儲存格 { section: [{ sheet, col, row, value }], hoursTop3: […], … }（findReportLinks 的 refs）；
+   *              有給的話那一列的 D 到 I 填公式（例如 ='MPS'!E76）
    * 回傳 { worksheet, rows: { hoursTop3: 5, … }, monthCol, months }
    */
   function addReportSheet(wb, o) {
@@ -2083,6 +2145,20 @@
       }
     });
 
+    // 各列的數值：公式參照 MPS 工作表，只顯示整數
+    var links = o.links || {};
+    Object.keys(links).forEach(function (key) {
+      var r = rows[key];
+      if (!r) return;
+      (links[key] || []).slice(0, R.months).forEach(function (ref, i) {
+        var cell = ws.getCell(r, R.monthCol + i);
+        var f = { formula: sheetRef(ref.sheet) + numToCol(ref.col) + ref.row };
+        if (ref.value !== null && ref.value !== undefined) f.result = ref.value;
+        cell.value = f;
+        cell.numFmt = INTEGER_FORMAT;
+      });
+    });
+
     wb.calcProperties = Object.assign({}, wb.calcProperties, { fullCalcOnLoad: true });
     return { worksheet: ws, rows: rows, monthCol: R.monthCol, months: R.months };
   }
@@ -2098,7 +2174,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 14,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 15,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,
@@ -2141,6 +2217,8 @@
     REPORT: REPORT,
     REPORT_ROWS: REPORT_ROWS,
     addReportSheet: addReportSheet,
+    REPORT_LINKS: REPORT_LINKS,
+    findReportLinks: findReportLinks,
     toNumber: toNumber,
     toBlob: toBlob
   };
