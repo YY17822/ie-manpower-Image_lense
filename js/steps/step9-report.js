@@ -29,6 +29,11 @@
  *     假日工作天數     =(46-D8*2)/8（法定加班上限 46 小時 − 平日天數 × 每天加班 2 小時）÷ 每天 8 小時
  *     綜合效率%（Top-3 機種）、綜合效率%（Non-Top 3 機種）、出勤率%   各月自己輸入，預設 80%、95%、95%
  *   工作時間、效率、出勤率、加班的兩個數字會記在這台電腦的瀏覽器裡，下次打開還是上次輸入的值。
+ *     需求人力 Off line_直接   輸入文書、物料、材製損、包裝、領班的人數（每個月一樣），填公式 =2+3+1+4+1，備註寫各種人數
+ *     需求人力 Off line_間接   輸入物料、領班的人數，同上
+ *   算出來的列：
+ *     需求人力 On line   =D5/(D8+D9)/(D10+D11)/D12/D14+D6/(D8+D9)/(D10+D11)/D13/D14+D7/D8/D10/D13/D14
+ *     需求人力 小計      =D15+D16（On line + Off line_直接，不含 Off line_間接，備註有寫）
  *   其他列之後再補。
  *
  *   來源有兩種：
@@ -53,6 +58,11 @@
   var STORE_KEY = 'ie-manpower.report';
   var MONTHS = XIO.REPORT.months;
   var DEFAULT_WORK_MINUTES = '480';
+  // 需求人力 Off line 的兩組人數（人員種類在 excel-io.js 的 REPORT_OFFLINE）
+  var OFFLINE = [
+    { key: 'offDirect', label: '需求人力 Off line_直接' },
+    { key: 'offIndirect', label: '需求人力 Off line_間接' }
+  ];
 
   var S = {
     upload: null,         // 上傳的第 8 步檔案 { name, buffer, sheets }
@@ -81,6 +91,10 @@
       otHours: s.otHours === undefined ? '' : String(s.otHours),
       otRate: s.otRate === undefined ? '' : String(s.otRate)
     };
+    OFFLINE.forEach(function (g) {
+      var saved = Array.isArray(s[g.key]) ? s[g.key] : [];
+      out[g.key] = XIO.REPORT_OFFLINE[g.key].map(function (c, i) { return saved[i] === undefined || saved[i] === null ? '' : String(saved[i]); });
+    });
     REMEMBERED.forEach(function (row) {
       var saved = Array.isArray(s[row.key]) ? s[row.key].slice(0, MONTHS) : [];
       while (saved.length < MONTHS) saved.push(row.def);
@@ -90,7 +104,7 @@
   }
   function saveInputs() {
     var i = S.inputs;
-    var keep = { otHours: i.otHours, otRate: i.otRate };
+    var keep = { otHours: i.otHours, otRate: i.otRate, offDirect: i.offDirect, offIndirect: i.offIndirect };
     REMEMBERED.forEach(function (row) { keep[row.key] = i[row.key]; });
     try { localStorage.setItem(STORE_KEY, JSON.stringify(keep)); } catch (e) { /* 存不了就算了 */ }
   }
@@ -116,6 +130,9 @@
       });
       out.otHours = num(i.otHours, '每日加班小時');
       out.otRate = num(i.otRate, '加班出勤人數 %', true);
+      OFFLINE.forEach(function (g) {
+        out[g.key] = XIO.REPORT_OFFLINE[g.key].map(function (c, k) { return num(i[g.key][k], g.label + '的' + c + '人數'); });
+      });
     } catch (e) {
       return { error: e.message };
     }
@@ -126,6 +143,10 @@
       if (miss) blanks.push('有 ' + miss + ' 個月沒有' + row.what + '。');
     });
     if (out.otHours === null || out.otRate === null) blanks.push('每日加班小時和加班出勤人數 % 都輸入後，才會填加班時間。');
+    OFFLINE.forEach(function (g) {
+      if (!out[g.key].some(function (v) { return v !== null; })) blanks.push(g.label + '還沒輸入人數，這一列先留空白。');
+    });
+    if (missWd) blanks.push('平日工作天數沒填的月份，需求人力 On line 會是 #DIV/0!。');
     return { values: out, blanks: blanks };
   }
 
@@ -231,7 +252,7 @@
         els.srcMsg),
       h('li', { class: 'task' },
         h('h2', { text: '輸入各月的數值' }),
-        h('p', { class: 'hint', text: '平日工作天數每個月都要輸入；工作時間預設 480 分，綜合效率預設 80%（Top-3）、95%（Non-Top 3），出勤率預設 95%，會記住上次輸入的值。假日工作天數會用公式自動算：（法定加班上限 46 小時 − 平日工作天數 × 每天加班 2 小時）÷ 8。加班時間 = 每日加班小時 × 60 × 加班出勤人數 %。' }),
+        h('p', { class: 'hint', text: '平日工作天數每個月都要輸入；工作時間預設 480 分，綜合效率預設 80%（Top-3）、95%（Non-Top 3），出勤率預設 95%，會記住上次輸入的值。假日工作天數會用公式自動算：（法定加班上限 46 小時 − 平日工作天數 × 每天加班 2 小時）÷ 8。加班時間 = 每日加班小時 × 60 × 加班出勤人數 %。Off line 的人數每個月一樣，會加總填入，各種人數寫在備註。' }),
         els.entry),
       h('li', { class: 'task' },
         h('h2', { text: '總表' }),
@@ -275,6 +296,19 @@
       h('span', { text: '小時，加班出勤人數' }),
       (function () { var el = input(inp.otRate, '加班出勤人數 %', function (v) { inp.otRate = v; }, 'in-tiny'); el.id = 'f9-ot-rate'; return el; })(),
       h('span', { text: '%' })));
+
+    // 需求人力 Off line：各種人員的人數（每個月一樣）
+    OFFLINE.forEach(function (g) {
+      var row = h('div', { class: 'field-row entry-ot' }, h('span', { class: 'field-label', text: g.label + '：' }));
+      XIO.REPORT_OFFLINE[g.key].forEach(function (cat, k) {
+        var id = 'f9-' + g.key + '-' + k;
+        var el = input(inp[g.key][k], g.label + ' ' + cat + ' 人數', function (v) { inp[g.key][k] = v; }, 'in-tiny');
+        el.id = id;
+        row.appendChild(h('label', { for: id, class: 'entry-cat', text: cat }));
+        row.appendChild(el);
+      });
+      els.entry.appendChild(row);
+    });
   }
 
   function onType() {
@@ -377,7 +411,7 @@
     var names = work.wb.worksheets.map(function (w) { return w.name; });
     var replacing = src.kind === 'file' && S.upload.sheets.some(function (n) { return sameName(n, SHEET_NAME); });
     var text = '匯出的檔案有 ' + names.length + ' 個工作表：' + names.join('、') + '。「' + SHEET_NAME +
-      '」已經填好第 4 到 14 列，其他列之後再補。';
+      '」已經填好第 4 到 18 列，其他列之後再補。';
     if (replacing) text += ' 檔案裡原本的「' + SHEET_NAME + '」工作表會重新建立。';
     setSummary(text, false, replacing);
 

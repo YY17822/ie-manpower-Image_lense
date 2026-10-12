@@ -1937,6 +1937,11 @@
   var OVERTIME_LIMIT = 46;     // 法定加班上限（小時/人/月）
   var WEEKDAY_OT_HOURS = 2;    // 平日每天加班 2 小時
   var DAY_HOURS = 8;           // 一天工作 8 小時
+  // 需求人力 Off line 的人員種類（之後要增減種類改這裡）
+  var REPORT_OFFLINE = {
+    offDirect: ['文書', '物料', '材製損', '包裝', '領班'],
+    offIndirect: ['物料', '領班']
+  };
   function isNum(v) { return typeof v === 'number' && !isNaN(v); }
   var REPORT_COLOR = {
     red: 'FFFF0000',       // 法定加班上限
@@ -2046,6 +2051,7 @@
    *                effTop3 / effNonTop3 / attendance   [6 個月的 %]（例如 80 代表 80%，存成 0.8）
    *                otHours      每日加班幾小時
    *                otRate       加班出勤人數 %（例如 80 代表 80%）
+   *                offDirect / offIndirect   各種人員的人數，順序同 REPORT_OFFLINE（null = 沒填）
    *              假日工作天數一律填公式 =(46-D8*2)/8；加班時間填公式 =2*60*80%（兩個數字都有才填），備註寫輸入的數值
    * 回傳 { worksheet, rows: { hoursTop3: 5, … }, monthCol, months }
    */
@@ -2213,6 +2219,62 @@
         (isNum(inp.otRate) ? inp.otRate : '?') + '%';
       note.alignment = { horizontal: 'left', vertical: 'middle' };
     }
+    function setNote(key, text) {
+      var c = ws.getCell(rows[key], R.noteCol);
+      c.value = text;
+      c.alignment = { horizontal: 'left', vertical: 'middle' };
+    }
+
+    // 需求人力 Off line_直接、Off line_間接：各種人員的人數相加（每個月一樣），備註寫各種人數
+    var offTotals = {};
+    [['needOffDirect', 'offDirect'], ['needOffIndirect', 'offIndirect']].forEach(function (pair) {
+      var key = pair[0], cats = REPORT_OFFLINE[pair[1]], counts = inp[pair[1]] || [];
+      if (!counts.some(isNum)) return;
+      var nums = cats.map(function (c, i) { return isNum(counts[i]) ? counts[i] : 0; });
+      var total = nums.reduce(function (a, b) { return a + b; }, 0);
+      offTotals[key] = total;
+      for (var m = 0; m < R.months; m++) {
+        var cell = monthCell(key, m);
+        cell.value = { formula: nums.join('+'), result: total };
+        cell.numFmt = 'General';
+      }
+      setNote(key, cats.map(function (c, i) { return c + ' ' + nums[i]; }).join('、'));
+    });
+
+    // 需求人力 On line：
+    //   Top 3     需求工時 ÷（平日+假日天數）÷（工作時間+加班時間）÷ Top-3 效率 ÷ 出勤率
+    //   Non-Top 3 需求工時 ÷（平日+假日天數）÷（工作時間+加班時間）÷ Non-Top 3 效率 ÷ 出勤率
+    //   重工      需求工時 ÷ 平日天數 ÷ 工作時間 ÷ Non-Top 3 效率 ÷ 出勤率
+    function num(key, m) {
+      var v = cellRawValue(monthCell(key, m));
+      v = plainValue(v);
+      return typeof v === 'number' ? v : (v === null || v === undefined ? 0 : NaN);
+    }
+    for (var n = 0; n < R.months; n++) {
+      var C2 = numToCol(R.monthCol + n);
+      var a = function (key) { return C2 + rows[key]; };
+      var days = '(' + a('weekdays') + '+' + a('holidays') + ')';
+      var mins = '(' + a('workMinutes') + '+' + a('overtimeMinutes') + ')';
+      var f = a('hoursTop3') + '/' + days + '/' + mins + '/' + a('effTop3') + '/' + a('attendance') + '+' +
+        a('hoursNonTop3') + '/' + days + '/' + mins + '/' + a('effNonTop3') + '/' + a('attendance') + '+' +
+        a('hoursRework') + '/' + a('weekdays') + '/' + a('workMinutes') + '/' + a('effNonTop3') + '/' + a('attendance');
+      var d = num('weekdays', n) + num('holidays', n);
+      var t = num('workMinutes', n) + num('overtimeMinutes', n);
+      var res = num('hoursTop3', n) / d / t / num('effTop3', n) / num('attendance', n) +
+        num('hoursNonTop3', n) / d / t / num('effNonTop3', n) / num('attendance', n) +
+        num('hoursRework', n) / num('weekdays', n) / num('workMinutes', n) / num('effNonTop3', n) / num('attendance', n);
+      var on = monthCell('needOnline', n);
+      on.value = isFinite(res) ? { formula: f, result: res } : { formula: f };
+      on.numFmt = '#,##0.0';
+
+      // 需求人力小計 = On line + Off line_直接（不含 Off line_間接）
+      var sub = monthCell('needSubtotal', n);
+      var subRes = isFinite(res) ? res + (offTotals.needOffDirect || 0) : null;
+      sub.value = subRes === null ? { formula: a('needOnline') + '+' + a('needOffDirect') }
+        : { formula: a('needOnline') + '+' + a('needOffDirect'), result: subRes };
+      sub.numFmt = '#,##0.0';
+    }
+    setNote('needSubtotal', '不含Off line_間接');
 
     wb.calcProperties = Object.assign({}, wb.calcProperties, { fullCalcOnLoad: true });
     return { worksheet: ws, rows: rows, monthCol: R.monthCol, months: R.months };
@@ -2229,7 +2291,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 17,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 18,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,
@@ -2273,6 +2335,7 @@
     REPORT_ROWS: REPORT_ROWS,
     addReportSheet: addReportSheet,
     REPORT_LINKS: REPORT_LINKS,
+    REPORT_OFFLINE: REPORT_OFFLINE,
     findReportLinks: findReportLinks,
     toNumber: toNumber,
     toBlob: toBlob

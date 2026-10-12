@@ -278,6 +278,8 @@ button.step:hover { background: rgba(11, 110, 105, 0.07); }
 .entry-name { width: 13rem; }
 .entry tbody th { color: var(--ink); font-size: 0.9375rem; padding-right: 0.75rem; }
 .entry-ot { margin-top: 0.875rem; }
+.entry-ot .field-label { font-weight: 700; }
+.entry-ot .entry-cat { font-weight: 400; margin-left: 0.25rem; }
 .entry-num { width: 5.5rem; text-align: right; }
 .entry-area + .actions { margin-top: 0.75rem; }
 
