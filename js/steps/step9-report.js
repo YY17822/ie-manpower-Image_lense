@@ -34,6 +34,10 @@
  *   算出來的列：
  *     需求人力 On line   =D5/(D8+D9)/(D10+D11)/D12/D14+D6/(D8+D9)/(D10+D11)/D13/D14+D7/D8/D10/D13/D14
  *     需求人力 小計      =D15+D16（On line + Off line_直接，不含 Off line_間接，備註有寫）
+ *   從「人力」工作表抓的列（第 8 步確認的列和當月那一行，例如 ='人力'!D4）：
+ *     現有人力 On line、Off line_直接、Off line_間接
+ *     現有人力 小計(on+off)  =D19+D20（不含 Off line_間接，備註有寫）
+ *   上傳第 8 步的檔案時，用第 8 步上次確認、記在瀏覽器裡的位置。
  *   其他列之後再補。
  *
  *   來源有兩種：
@@ -203,6 +207,52 @@
     return refs;
   }
 
+  // 現有人力：從「人力」工作表抓第 8 步確認過的那幾列
+  var MP_SHEET = '人力';
+  var MP_STORE_KEY = 'ie-manpower.manpower';
+  var MP_LINKS = [
+    { key: 'haveOnline', item: 'online', label: 'Online' },
+    { key: 'haveOffDirect', item: 'offDirect', label: 'Off line（直接）' },
+    { key: 'haveOffIndirect', item: 'offIndirect', label: 'Off line（間接）' }
+  ];
+
+  // 第 8 步確認的位置：剛做完第 8 步就用它的；上傳的檔案用第 8 步記在瀏覽器裡的位置
+  function manpowerPositions(src) {
+    if (src.kind === 'prev' && src.prev.rows && src.prev.firstMonthCol) {
+      return { rows: src.prev.rows, firstCol: src.prev.firstMonthCol, from: 'chain' };
+    }
+    var s = {};
+    try { s = JSON.parse(localStorage.getItem(MP_STORE_KEY) || '{}') || {}; } catch (e) { s = {}; }
+    var firstCol = parseInt(s.lastFirstCol, 10) || 0;
+    if (!s.rows || !firstCol) return null;
+    return { rows: s.rows, firstCol: firstCol, from: 'saved' };
+  }
+
+  // 回傳 { haveOnline: { found, label, sheet, row, refs, reason }, … }
+  function manpowerLinks(wb, src) {
+    var ws = wb.worksheets.filter(function (w) { return sameName(w.name, MP_SHEET); })[0];
+    var pos = ws ? manpowerPositions(src) : null;
+    var out = {};
+    MP_LINKS.forEach(function (link) {
+      var info = { found: false, label: link.label, sheet: MP_SHEET, refs: [], from: pos && pos.from };
+      var r = pos ? parseInt(pos.rows[link.item], 10) : 0;
+      if (!ws) info.reason = '檔案裡沒有「' + MP_SHEET + '」工作表（第 8 步）';
+      else if (!pos || !r) info.reason = '不知道「' + link.label + '」在人力工作表的哪一列，請重做第 8 步';
+      else {
+        info.found = true;
+        info.row = r;
+        var row = ws.findRow(r);
+        for (var i = 0; i < MONTHS; i++) {
+          var c = pos.firstCol + i;
+          var n = XIO.toNumber(row ? row.findCell(c) && XIO.plainValue(row.findCell(c).value) : null);
+          info.refs.push({ sheet: ws.name, col: c, row: r, value: n === null || isNaN(n) ? null : n, numFmt: 'General' });
+        }
+      }
+      out[link.key] = info;
+    });
+    return out;
+  }
+
   // findReportLinks 的結果 → addReportSheet 要的 { key: refs }
   function linkRefs(links) {
     var out = {};
@@ -358,6 +408,8 @@
       var refs = monthRefs(main, src);
       work.refs = refs;
       work.links = XIO.findReportLinks(main, { dataStartRow: dataStartRow(src), months: XIO.REPORT.months });
+      var mp = manpowerLinks(wb, src);
+      Object.keys(mp).forEach(function (k) { work.links[k] = mp[k]; });
       work.wb = wb;
       work.main = main;
       work.loading = false;
@@ -411,7 +463,7 @@
     var names = work.wb.worksheets.map(function (w) { return w.name; });
     var replacing = src.kind === 'file' && S.upload.sheets.some(function (n) { return sameName(n, SHEET_NAME); });
     var text = '匯出的檔案有 ' + names.length + ' 個工作表：' + names.join('、') + '。「' + SHEET_NAME +
-      '」已經填好第 4 到 18 列，其他列之後再補。';
+      '」已經填好第 4 到 22 列，其他列之後再補。';
     if (replacing) text += ' 檔案裡原本的「' + SHEET_NAME + '」工作表會重新建立。';
     setSummary(text, false, replacing);
 
@@ -456,22 +508,36 @@
   function renderLinks(work) {
     var months = XIO.REPORT.months;
     var rowLabel = {};
-    XIO.REPORT_ROWS.forEach(function (d) { rowLabel[d.key] = d.label; });
+    XIO.REPORT_ROWS.forEach(function (d) { rowLabel[d.key] = d.label || d.unit; });
     var warn = false;
 
     var head = h('tr', null,
       h('th', { class: 'colhead', scope: 'col', text: '總表' }),
-      h('th', { class: 'colhead', scope: 'col', text: '來源（' + work.main.name + ' 工作表）' }));
+      h('th', { class: 'colhead', scope: 'col', text: '來源' }));
     for (var i = 0; i < months; i++) {
       var r = work.refs && work.refs[i];
       head.appendChild(h('th', { class: 'colhead', scope: 'col',
         text: XIO.numToCol(XIO.REPORT.monthCol + i) + (r && r.text ? '　' + r.text : '') }));
     }
     var body = h('tbody');
-    XIO.REPORT_LINKS.forEach(function (link) {
+    XIO.REPORT_LINKS.concat(MP_LINKS).forEach(function (link) {
       var info = work.links[link.key];
       var src;
-      if (!info.found) {
+      var isMp = !!info.sheet;
+      if (!info.found && isMp) {
+        warn = true;
+        src = '找不到';
+        els.notes.appendChild(h('li', { class: 'is-warn' }, '現有人力 ' + rowLabel[link.key] + '：' + info.reason + '，這一列先留空白。'));
+      } else if (isMp) {
+        src = info.sheet + ' 工作表「' + link.label + '」第 ' + info.row + ' 列，' +
+          XIO.numToCol(info.refs[0].col) + ' 到 ' + XIO.numToCol(info.refs[info.refs.length - 1].col) + ' 行' +
+          (info.from === 'saved' ? '（第 8 步上次確認的位置）' : '');
+        var blank = info.refs.filter(function (x) { return x.value === null; }).length;
+        if (blank) {
+          warn = true;
+          els.notes.appendChild(h('li', { class: 'is-warn' }, '現有人力 ' + rowLabel[link.key] + '：有 ' + blank + ' 個月是空白或不是數字。'));
+        }
+      } else if (!info.found) {
         warn = true;
         src = '找不到「' + link.label + '」';
         els.notes.appendChild(h('li', { class: 'is-warn' }, rowLabel[link.key] + '：' + work.main.name +
@@ -487,13 +553,15 @@
         }
       }
       var tr = h('tr', null,
-        h('th', { class: 'rowhead', scope: 'row', text: rowLabel[link.key] }),
+        h('th', { class: 'rowhead', scope: 'row', text: (isMp ? '現有人力 ' : '') + rowLabel[link.key] }),
         h('td', { text: src }));
       for (var m = 0; m < months; m++) {
         var ref = info.refs[m];
+        var shown = !ref ? '' : ref.value === null ? (isMp ? '（空白）' : '（重新計算後才有）')
+          : isMp ? String(Math.round(ref.value * 10) / 10) : Math.round(ref.value).toLocaleString('en-US');
         tr.appendChild(h('td', {
-          class: ref ? 'is-num' : 'is-missing',
-          text: ref ? (ref.value === null ? '（重新計算後才有）' : Math.round(ref.value).toLocaleString('en-US')) : ''
+          class: ref && !(isMp && ref.value === null) ? 'is-num' : 'is-missing',
+          text: shown
         }));
       }
       body.appendChild(tr);
@@ -501,7 +569,7 @@
 
     var ex = work.links.section.found && work.links.section.refs[0];
     els.result.textContent = '';
-    els.result.appendChild(h('p', { class: 'sheet-caption', text: '已經填好的列（數值只顯示整數）：' }));
+    els.result.appendChild(h('p', { class: 'sheet-caption', text: '從其他工作表抓的列（需求工時只顯示整數）：' }));
     els.result.appendChild(h('div', { class: 'sheet-scroll', tabindex: '0', role: 'group', 'aria-label': '總表已填的列' },
       h('table', { class: 'sheet is-result is-check' }, h('thead', null, head), body)));
     if (ex) {

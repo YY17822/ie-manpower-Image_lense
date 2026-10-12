@@ -2172,7 +2172,7 @@
         var f = { formula: sheetRef(ref.sheet) + numToCol(ref.col) + ref.row };
         if (ref.value !== null && ref.value !== undefined) f.result = ref.value;
         cell.value = f;
-        cell.numFmt = INTEGER_FORMAT;
+        cell.numFmt = ref.numFmt || INTEGER_FORMAT;
       });
     });
 
@@ -2276,6 +2276,17 @@
     }
     setNote('needSubtotal', '不含Off line_間接');
 
+    // 現有人力小計 = On line + Off line_直接（不含 Off line_間接）
+    for (var k = 0; k < R.months; k++) {
+      var CK = numToCol(R.monthCol + k);
+      var hs = monthCell('haveSubtotal', k);
+      var hv = num('haveOnline', k) + num('haveOffDirect', k);
+      var hf = CK + rows.haveOnline + '+' + CK + rows.haveOffDirect;
+      hs.value = isFinite(hv) ? { formula: hf, result: hv } : { formula: hf };
+      hs.numFmt = 'General';
+    }
+    setNote('haveSubtotal', '不含Off line_間接');
+
     wb.calcProperties = Object.assign({}, wb.calcProperties, { fullCalcOnLoad: true });
     return { worksheet: ws, rows: rows, monthCol: R.monthCol, months: R.months };
   }
@@ -2291,7 +2302,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 18,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 19,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,

@@ -5,7 +5,7 @@
  * ExcelJS（網路版）：抓過一次就一直用快取。
  * 每次新增檔案時，把檔名加進 SHELL，並把 CACHE 的版本號加 1。
  */
-var CACHE = 'ie-manpower-v18';
+var CACHE = 'ie-manpower-v19';
 var EXCELJS_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
 var SHELL = [
   './',

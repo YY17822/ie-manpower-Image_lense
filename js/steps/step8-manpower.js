@@ -51,13 +51,15 @@
   function loadSettings() {
     var s = {};
     try { s = JSON.parse(localStorage.getItem(STORE_KEY) || '{}') || {}; } catch (e) { s = {}; }
-    return { rows: s.rows && typeof s.rows === 'object' ? s.rows : {} };
+    // lastFirstCol：上次確認的當月行，只給第 9 步（上傳第 8 步檔案時）用，這一步不拿來當預設值
+    return { rows: s.rows && typeof s.rows === 'object' ? s.rows : {}, lastFirstCol: parseInt(s.lastFirstCol, 10) || 0 };
   }
   function saveSettings() {
     if (!S.pick) return;
     ITEMS.forEach(function (item) {
       if (S.pick.rows[item.key]) settings.rows[item.key] = S.pick.rows[item.key];
     });
+    if (S.pick.firstCol) settings.lastFirstCol = S.pick.firstCol;
     try { localStorage.setItem(STORE_KEY, JSON.stringify(settings)); } catch (e) { /* 存不了就算了 */ }
   }
 
