@@ -1934,6 +1934,10 @@
     lastRow: 24
   };
   var REPORT_FONT = '微軟正黑體';
+  var OVERTIME_LIMIT = 46;     // 法定加班上限（小時/人/月）
+  var WEEKDAY_OT_HOURS = 2;    // 平日每天加班 2 小時
+  var DAY_HOURS = 8;           // 一天工作 8 小時
+  function isNum(v) { return typeof v === 'number' && !isNaN(v); }
   var REPORT_COLOR = {
     red: 'FFFF0000',       // 法定加班上限
     head: 'FF366092',      // 表頭深藍
@@ -2036,6 +2040,13 @@
    *              有給的話表頭填公式（例如 ='MPS'!N3），沒給的那幾格留空白
    * o.links      各列要抓的儲存格 { section: [{ sheet, col, row, value }], hoursTop3: […], … }（findReportLinks 的 refs）；
    *              有給的話那一列的 D 到 I 填公式（例如 ='MPS'!E76）
+   * o.inputs     使用者在畫面上輸入的數值：
+   *                weekdays     [6 個月的平日工作天數]（null = 沒填）
+   *                workMinutes  [6 個月的工作時間（分/天）]
+   *                effTop3 / effNonTop3 / attendance   [6 個月的 %]（例如 80 代表 80%，存成 0.8）
+   *                otHours      每日加班幾小時
+   *                otRate       加班出勤人數 %（例如 80 代表 80%）
+   *              假日工作天數一律填公式 =(46-D8*2)/8；加班時間填公式 =2*60*80%（兩個數字都有才填），備註寫輸入的數值
    * 回傳 { worksheet, rows: { hoursTop3: 5, … }, monthCol, months }
    */
   function addReportSheet(wb, o) {
@@ -2159,6 +2170,50 @@
       });
     });
 
+    // 使用者輸入的列，以及由它們算出來的列
+    var inp = o.inputs || {};
+    function monthCell(key, i) { return ws.getCell(rows[key], R.monthCol + i); }
+    for (var m = 0; m < R.months; m++) {
+      var L = numToCol(R.monthCol + m);
+      var wd = inp.weekdays ? inp.weekdays[m] : null;
+      if (wd !== null && wd !== undefined) {
+        monthCell('weekdays', m).value = wd;
+        monthCell('weekdays', m).numFmt = 'General';
+      }
+      // 假日工作天數 =（法定加班上限 46 小時 − 平日工作天數 × 每日加班 2 小時）÷ 每天 8 小時
+      var hd = monthCell('holidays', m);
+      hd.value = {
+        formula: '(' + OVERTIME_LIMIT + '-' + L + rows.weekdays + '*' + WEEKDAY_OT_HOURS + ')/' + DAY_HOURS,
+        result: (OVERTIME_LIMIT - (wd || 0) * WEEKDAY_OT_HOURS) / DAY_HOURS
+      };
+      hd.numFmt = '0.00';
+      var wm = inp.workMinutes ? inp.workMinutes[m] : null;
+      if (wm !== null && wm !== undefined) {
+        monthCell('workMinutes', m).value = wm;
+        monthCell('workMinutes', m).numFmt = INTEGER_FORMAT;
+      }
+      // 綜合效率、出勤率：輸入 80 存成 0.8，格式顯示成 80%
+      ['effTop3', 'effNonTop3', 'attendance'].forEach(function (key) {
+        var v = inp[key] ? inp[key][m] : null;
+        if (!isNum(v)) return;
+        var pc = monthCell(key, m);
+        pc.value = Math.round(v * 1e6) / 1e8;
+        pc.numFmt = Math.round(v) === v ? '0%' : '0.0%';
+      });
+      // 加班時間（分/天）= 每日加班小時 × 60 × 加班出勤人數 %
+      if (isNum(inp.otHours) && isNum(inp.otRate)) {
+        var ot = monthCell('overtimeMinutes', m);
+        ot.value = { formula: inp.otHours + '*60*' + inp.otRate + '%', result: inp.otHours * 60 * inp.otRate / 100 };
+        ot.numFmt = 'General';
+      }
+    }
+    if (isNum(inp.otHours) || isNum(inp.otRate)) {
+      var note = ws.getCell(rows.overtimeMinutes, R.noteCol);
+      note.value = '每日加班 ' + (isNum(inp.otHours) ? inp.otHours : '?') + ' 小時 × 60 × 加班出勤人數 ' +
+        (isNum(inp.otRate) ? inp.otRate : '?') + '%';
+      note.alignment = { horizontal: 'left', vertical: 'middle' };
+    }
+
     wb.calcProperties = Object.assign({}, wb.calcProperties, { fullCalcOnLoad: true });
     return { worksheet: ws, rows: rows, monthCol: R.monthCol, months: R.months };
   }
@@ -2174,7 +2229,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 15,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 17,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,

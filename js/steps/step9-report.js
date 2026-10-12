@@ -20,6 +20,15 @@
  *     需求工時(Top 3)        ← 「Top 3 總需求工時」那一列，例如 ='MPS'!N77
  *     需求工時(Non-Top 3)    ← 「Others 總需求工時」那一列
  *     需求工時（重工）        ← 「RMA總需求工時」那一列
+ *
+ *   使用者在畫面上輸入的列：
+ *     平日工作天數     各月自己輸入（每個月不同，不記住）
+ *     工作時間         各月自己輸入，預設 480 分
+ *     加班時間         輸入每日加班幾小時、加班出勤人數 %，填公式 =2*60*80%，備註寫輸入的數值
+ *   由輸入算出來的列：
+ *     假日工作天數     =(46-D8*2)/8（法定加班上限 46 小時 − 平日天數 × 每天加班 2 小時）÷ 每天 8 小時
+ *     綜合效率%（Top-3 機種）、綜合效率%（Non-Top 3 機種）、出勤率%   各月自己輸入，預設 80%、95%、95%
+ *   工作時間、效率、出勤率、加班的兩個數字會記在這台電腦的瀏覽器裡，下次打開還是上次輸入的值。
  *   其他列之後再補。
  *
  *   來源有兩種：
@@ -41,13 +50,89 @@
   var TITLE = '需求工時';
   var SUFFIX = '_總表';
   var EXTRA = ['P003', '人力', SHEET_NAME];
+  var STORE_KEY = 'ie-manpower.report';
+  var MONTHS = XIO.REPORT.months;
+  var DEFAULT_WORK_MINUTES = '480';
 
   var S = {
     upload: null,         // 上傳的第 8 步檔案 { name, buffer, sheets }
     preferUpload: false,
-    work: null            // 拿來預覽的活頁簿 { src, loading, error, wb, main }
+    work: null,           // 拿來預覽的活頁簿 { src, loading, error, wb, main }
+    inputs: null          // 輸入框裡的文字 { weekdays: [6], workMinutes: [6], effTop3: [6], effNonTop3: [6], attendance: [6], otHours, otRate }
   };
   var els = {};
+  var timer = null;
+
+  function blank6(v) { var a = []; for (var i = 0; i < MONTHS; i++) a.push(v); return a; }
+
+  // 各月自己輸入、會記住上次的值的列（percent: 輸入的是 %，例如 80 代表 80%）
+  var REMEMBERED = [
+    { key: 'workMinutes', label: '工作時間（分/天）', what: '工作時間', def: DEFAULT_WORK_MINUTES },
+    { key: 'effTop3', label: '綜合效率%（Top-3 機種）', what: '綜合效率%（Top-3 機種）', def: '80', percent: true },
+    { key: 'effNonTop3', label: '綜合效率%（Non-Top 3 機種）', what: '綜合效率%（Non-Top 3 機種）', def: '95', percent: true },
+    { key: 'attendance', label: '出勤率%', what: '出勤率%', def: '95', percent: true }
+  ];
+
+  function loadInputs() {
+    var s = {};
+    try { s = JSON.parse(localStorage.getItem(STORE_KEY) || '{}') || {}; } catch (e) { s = {}; }
+    var out = {
+      weekdays: blank6(''),
+      otHours: s.otHours === undefined ? '' : String(s.otHours),
+      otRate: s.otRate === undefined ? '' : String(s.otRate)
+    };
+    REMEMBERED.forEach(function (row) {
+      var saved = Array.isArray(s[row.key]) ? s[row.key].slice(0, MONTHS) : [];
+      while (saved.length < MONTHS) saved.push(row.def);
+      out[row.key] = saved.map(function (v) { return v === undefined || v === null ? row.def : String(v); });
+    });
+    return out;
+  }
+  function saveInputs() {
+    var i = S.inputs;
+    var keep = { otHours: i.otHours, otRate: i.otRate };
+    REMEMBERED.forEach(function (row) { keep[row.key] = i[row.key]; });
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(keep)); } catch (e) { /* 存不了就算了 */ }
+  }
+
+  // 輸入框的文字 → 數字。回傳 { values, error, blanks: [說明…] }
+  function readInputs() {
+    var i = S.inputs;
+    var out = { weekdays: [], otHours: null, otRate: null };
+    var blanks = [];
+    function num(text, what, percent) {
+      var t = String(text);
+      if (percent) t = t.replace(/[%％]\s*$/, '');      // 允許打成 80%
+      var n = XIO.toNumber(t);
+      if (n !== null && isNaN(n)) throw new Error(what + '不是數字。');
+      return n;
+    }
+    try {
+      for (var m = 0; m < MONTHS; m++) {
+        out.weekdays.push(num(i.weekdays[m], monthName(m) + '的平日工作天數'));
+      }
+      REMEMBERED.forEach(function (row) {
+        out[row.key] = i[row.key].map(function (v, m) { return num(v, monthName(m) + '的' + row.what, row.percent); });
+      });
+      out.otHours = num(i.otHours, '每日加班小時');
+      out.otRate = num(i.otRate, '加班出勤人數 %', true);
+    } catch (e) {
+      return { error: e.message };
+    }
+    var missWd = out.weekdays.filter(function (v) { return v === null; }).length;
+    if (missWd) blanks.push('有 ' + missWd + ' 個月還沒輸入平日工作天數（假日工作天數會照 0 天算）。');
+    REMEMBERED.forEach(function (row) {
+      var miss = out[row.key].filter(function (v) { return v === null; }).length;
+      if (miss) blanks.push('有 ' + miss + ' 個月沒有' + row.what + '。');
+    });
+    if (out.otHours === null || out.otRate === null) blanks.push('每日加班小時和加班出勤人數 % 都輸入後，才會填加班時間。');
+    return { values: out, blanks: blanks };
+  }
+
+  function monthName(m) {
+    var r = S.work && S.work.refs && S.work.refs[m];
+    return r && r.text ? r.text : '第 ' + (m + 1) + ' 個月';
+  }
 
   function sameName(a, b) { return String(a).toLowerCase() === String(b).toLowerCase(); }
   function isExtra(name) { return EXTRA.some(function (n) { return sameName(n, name); }); }
@@ -122,6 +207,11 @@
     });
     els.srcMsg = h('p', { class: 'msg is-error', role: 'alert', hidden: true });
 
+    if (!S.inputs) S.inputs = loadInputs();
+    els.entry = h('div', { class: 'entry-area' });
+    els.monthHeads = [];
+    buildEntry();
+
     els.summary = h('p', { class: 'summary', 'aria-live': 'polite' });
     els.notes = h('ul', { class: 'notes' });
     els.result = h('div', { class: 'sheet-area' });
@@ -131,7 +221,7 @@
 
     panel.appendChild(h('div', { class: 'step-head' },
       h('h1', { text: '總表' }),
-      h('p', { text: '在同一個檔案裡新增「總表」工作表，並用公式從 MPS 工作表抓 MPS (Production) 和三列需求工時。其他列之後再補上。' })));
+      h('p', { text: '在同一個檔案裡新增「總表」工作表，用公式從 MPS 工作表抓產量和需求工時，並填入工作天數、工作時間、加班時間。其他列之後再補上。' })));
 
     panel.appendChild(h('ol', { class: 'tasks' },
       h('li', { class: 'task' },
@@ -140,11 +230,58 @@
         h('div', { class: 'link-row' }, els.switchBtn, els.backBtn),
         els.srcMsg),
       h('li', { class: 'task' },
+        h('h2', { text: '輸入各月的數值' }),
+        h('p', { class: 'hint', text: '平日工作天數每個月都要輸入；工作時間預設 480 分，綜合效率預設 80%（Top-3）、95%（Non-Top 3），出勤率預設 95%，會記住上次輸入的值。假日工作天數會用公式自動算：（法定加班上限 46 小時 − 平日工作天數 × 每天加班 2 小時）÷ 8。加班時間 = 每日加班小時 × 60 × 加班出勤人數 %。' }),
+        els.entry),
+      h('li', { class: 'task' },
         h('h2', { text: '總表' }),
         els.summary, els.notes, els.result, els.preview,
         h('div', { class: 'actions' }, els.exportBtn, els.exportNote))));
 
     refresh();
+  }
+
+  /* ---------- 輸入表 ---------- */
+  function input(value, label, onInput, cls) {
+    var el = h('input', {
+      type: 'text', class: 'in ' + (cls || 'entry-num'), inputmode: 'decimal', autocomplete: 'off',
+      value: value, 'aria-label': label
+    });
+    el.addEventListener('input', function () { onInput(el.value); onType(); });
+    return el;
+  }
+
+  function buildEntry() {
+    var inp = S.inputs;
+    var head = h('tr', null, h('th', { scope: 'col', text: '項目' }));
+    for (var m = 0; m < MONTHS; m++) {
+      var th = h('th', { scope: 'col', text: monthName(m) });
+      els.monthHeads.push(th);
+      head.appendChild(th);
+    }
+    var body = h('tbody');
+    [{ key: 'weekdays', label: '平日工作天數（天/月）' }].concat(REMEMBERED).forEach(function (row) {
+      var tr = h('tr', null, h('th', { scope: 'row', text: row.label }));
+      inp[row.key].forEach(function (v, i) {
+        tr.appendChild(h('td', null, input(v, row.label + '，' + monthName(i), function (val) { inp[row.key][i] = val; })));
+      });
+      body.appendChild(tr);
+    });
+    els.entry.appendChild(h('div', { class: 'entry-scroll' },
+      h('table', { class: 'entry' }, h('thead', null, head), body)));
+    els.entry.appendChild(h('div', { class: 'field-row entry-ot' },
+      h('label', { for: 'f9-ot-hours', text: '加班時間：每日加班' }),
+      (function () { var el = input(inp.otHours, '每日加班幾小時', function (v) { inp.otHours = v; }, 'in-tiny'); el.id = 'f9-ot-hours'; return el; })(),
+      h('span', { text: '小時，加班出勤人數' }),
+      (function () { var el = input(inp.otRate, '加班出勤人數 %', function (v) { inp.otRate = v; }, 'in-tiny'); el.id = 'f9-ot-rate'; return el; })(),
+      h('span', { text: '%' })));
+  }
+
+  function onType() {
+    saveInputs();
+    els.exportNote.textContent = '';
+    clearTimeout(timer);
+    timer = setTimeout(refresh, 250);
   }
 
   /* ---------- 來源 ---------- */
@@ -187,7 +324,6 @@
       var refs = monthRefs(main, src);
       work.refs = refs;
       work.links = XIO.findReportLinks(main, { dataStartRow: dataStartRow(src), months: XIO.REPORT.months });
-      work.report = XIO.addReportSheet(wb, { monthRefs: refs || [], links: linkRefs(work.links) });
       work.wb = wb;
       work.main = main;
       work.loading = false;
@@ -231,11 +367,17 @@
     if (S.work.error) { setSummary(S.work.error, true); return; }
 
     var work = S.work;
+    // 輸入表的月份表頭
+    els.monthHeads.forEach(function (th, m) { th.textContent = monthName(m); });
+    var read = readInputs();
+    if (read.error) { setSummary(read.error, true); return; }
+    // 每次都照目前的輸入重新產生總表（給預覽用）
+    work.report = XIO.addReportSheet(work.wb, { monthRefs: work.refs || [], links: linkRefs(work.links), inputs: read.values });
     var ws = work.report.worksheet;
     var names = work.wb.worksheets.map(function (w) { return w.name; });
     var replacing = src.kind === 'file' && S.upload.sheets.some(function (n) { return sameName(n, SHEET_NAME); });
     var text = '匯出的檔案有 ' + names.length + ' 個工作表：' + names.join('、') + '。「' + SHEET_NAME +
-      '」已經填好 MPS (Production) 和三列需求工時，其他列之後再補。';
+      '」已經填好第 4 到 14 列，其他列之後再補。';
     if (replacing) text += ' 檔案裡原本的「' + SHEET_NAME + '」工作表會重新建立。';
     setSummary(text, false, replacing);
 
@@ -249,6 +391,7 @@
     }
 
     var warn = renderLinks(work);
+    read.blanks.forEach(function (t) { warn = true; els.notes.appendChild(h('li', { class: 'is-warn' }, t)); });
     if (warn) els.summary.className = 'summary is-warn';
 
     ui.renderSheet(els.preview, ws, {
@@ -262,6 +405,7 @@
     els.exportBtn.disabled = false;
     var refs = work.refs || [];
     var links = linkRefs(work.links);
+    var inputs = read.values;
     IEApp.state.withReport = {
       outName: outputName(src),
       mainSheet: work.main.name,
@@ -269,7 +413,8 @@
       reportRows: work.report.rows,
       monthCol: work.report.monthCol,
       monthCount: work.report.months,
-      build: function () { return buildWorkbook(src, refs, links); }
+      inputs: inputs,
+      build: function () { return buildWorkbook(src, refs, links, inputs); }
     };
   }
 
@@ -338,9 +483,9 @@
   }
 
   /* ---------- 產生活頁簿 ---------- */
-  function buildWorkbook(src, refs, links) {
+  function buildWorkbook(src, refs, links, inputs) {
     return buildFrom(src).then(function (wb) {
-      XIO.addReportSheet(wb, { monthRefs: refs, links: links });
+      XIO.addReportSheet(wb, { monthRefs: refs, links: links, inputs: inputs });
       return wb;
     });
   }

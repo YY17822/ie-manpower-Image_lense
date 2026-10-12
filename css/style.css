@@ -276,6 +276,8 @@ button.step:hover { background: rgba(11, 110, 105, 0.07); }
 .entry td { padding: 0.1875rem 0.375rem 0.1875rem 0; }
 .entry .in { padding: 0.375rem 0.5rem; }
 .entry-name { width: 13rem; }
+.entry tbody th { color: var(--ink); font-size: 0.9375rem; padding-right: 0.75rem; }
+.entry-ot { margin-top: 0.875rem; }
 .entry-num { width: 5.5rem; text-align: right; }
 .entry-area + .actions { margin-top: 0.75rem; }
 
