@@ -38,7 +38,9 @@
  *     現有人力 On line、Off line_直接、Off line_間接
  *     現有人力 小計(on+off)  =D19+D20（不含 Off line_間接，備註有寫）
  *   上傳第 8 步的檔案時，用第 8 步上次確認、記在瀏覽器裡的位置。
- *   其他列之後再補。
+ *   最後兩列：
+ *     人力需求差異(現有-需求)   =D22-D18
+ *     Loading Rate%(含加班)     =D22/D18（顯示成 %）
  *
  *   來源有兩種：
  *     a. 剛才第 8 步做好的結果（不用先匯出，直接沿用）
@@ -292,7 +294,7 @@
 
     panel.appendChild(h('div', { class: 'step-head' },
       h('h1', { text: '總表' }),
-      h('p', { text: '在同一個檔案裡新增「總表」工作表，用公式從 MPS 工作表抓產量和需求工時，並填入工作天數、工作時間、加班時間。其他列之後再補上。' })));
+      h('p', { text: '在同一個檔案裡新增「總表」工作表，用公式從 MPS、人力工作表抓產量、需求工時和現有人力，加上畫面上輸入的天數、工時、效率、出勤率和 Off line 人數，算出需求人力、人力差異和 Loading Rate。' })));
 
     panel.appendChild(h('ol', { class: 'tasks' },
       h('li', { class: 'task' },
@@ -463,7 +465,7 @@
     var names = work.wb.worksheets.map(function (w) { return w.name; });
     var replacing = src.kind === 'file' && S.upload.sheets.some(function (n) { return sameName(n, SHEET_NAME); });
     var text = '匯出的檔案有 ' + names.length + ' 個工作表：' + names.join('、') + '。「' + SHEET_NAME +
-      '」已經填好第 4 到 22 列，其他列之後再補。';
+      '」第 4 到 24 列都已經填好。';
     if (replacing) text += ' 檔案裡原本的「' + SHEET_NAME + '」工作表會重新建立。';
     setSummary(text, false, replacing);
 

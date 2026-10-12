@@ -2287,6 +2287,19 @@
     }
     setNote('haveSubtotal', '不含Off line_間接');
 
+    // 人力需求差異 = 現有人力小計 − 需求人力小計；Loading Rate = 現有人力小計 ÷ 需求人力小計
+    for (var g = 0; g < R.months; g++) {
+      var CG = numToCol(R.monthCol + g);
+      var have = CG + rows.haveSubtotal, need = CG + rows.needSubtotal;
+      var hv2 = num('haveSubtotal', g), nv2 = num('needSubtotal', g);
+      var gap = monthCell('gap', g);
+      gap.value = isFinite(hv2 - nv2) ? { formula: have + '-' + need, result: hv2 - nv2 } : { formula: have + '-' + need };
+      gap.numFmt = '#,##0.0';
+      var lr = monthCell('loading', g);
+      lr.value = nv2 && isFinite(hv2 / nv2) ? { formula: have + '/' + need, result: hv2 / nv2 } : { formula: have + '/' + need };
+      lr.numFmt = '0%';
+    }
+
     wb.calcProperties = Object.assign({}, wb.calcProperties, { fullCalcOnLoad: true });
     return { worksheet: ws, rows: rows, monthCol: R.monthCol, months: R.months };
   }
@@ -2302,7 +2315,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 19,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 20,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,
