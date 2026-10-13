@@ -1,6 +1,6 @@
 # IE 人力需求小程式
 
-IE 部門每月月底計算未來六個月人力需求的小工具。一步一步做，目前完成第 1 到第 9 步。
+IE 部門每月月底計算未來六個月人力需求的小工具。一步一步做，目前完成第 1 到第 10 步（第 10 步 RMA人力需求目前只有版面）。
 
 名詞：**行** = 直的（A、B、C…），**列** = 橫的（1、2、3…）。
 
@@ -242,6 +242,28 @@ P003 的 Labor 是做 Base Qty 個的工時（Base Qty 有 1 也有 100），除
 - 其他輸入和抓來的數值都參照第一張表，例如 D34 `=D8`、D30 `=D4`、月份表頭 D29 `=D3`；上面改了下面會跟著變。
 - 需求人力 On line、兩個小計、人力需求差異、Loading Rate 用第二張表自己的數字算（因為假日工作天數不同，結果也不同）。
 
+## 第 10 步：RMA人力需求
+
+在同一個檔案裡新增 `RMA人力需求` 工作表。目前先建立表格的樣式、格式、外框格線和位置，各格的內容之後再補上。
+
+1. 第 9 步的 Excel：剛做完第 9 步的話會直接沿用；也可以上傳之前第 9 步匯出的檔案。
+2. 確認右上角的 Cut-off 日期（預設今天）和版次（預設 A，會記住上次輸入的值）。
+3. 按「匯出 Excel」，得到 `…_總表_RMA人力.xlsx`。
+
+版面（B 到 J 行、第 3 到 13 列）：
+
+| 位置 | 內容 |
+| --- | --- |
+| 第 3 列 | B:C「法定加班上限46hr/人」（紅底白字置中）；J「Cut-off: 2026/9/29Ver:A」 |
+| 第 4 列 | 表頭，深藍底白字：B:C 合併畫斜線；D 到 I 是六個月（參照總表的月份，例如 `='總表'!D3`）；J 是備註（靠左） |
+| 第 5 列 | MPS (PCS)，淺藍底 |
+| 第 6–10 列 | 需求工時、平日／假日工作天數、工作時間、加班時間；C 行是單位 |
+| 第 11–12 列 | 綜合效率%、出勤率%（B:C 合併） |
+| 第 13 列 | 需求人力 On line，淺綠底 |
+
+- 外框粗線、裡面細線，字型是微軟正黑體。版面設定在 `js/excel-io.js` 的 `RMA_LAYOUT`、`RMA_ROWS`。
+- 對已經有 `RMA人力需求` 的檔案重做這一步，會重新建立。
+
 ### 已知的 ExcelJS 問題：整張表變成粗體＋斜體＋刪除線
 
 P003 這類系統匯出的報表，字型設定會把「沒有斜體、沒有刪除線」明寫成 `<i val="0">`、`<strike val="0">`。
@@ -267,6 +289,7 @@ js/steps/step6-summary.js       第 6 步　需求工時匯總
 js/steps/step7-rma.js           第 7 步　RMA 需求工時
 js/steps/step8-manpower.js      第 8 步　匯入人力報表
 js/steps/step9-report.js        第 9 步　總表
+js/steps/step10-rma-manpower.js 第 10 步　RMA人力需求
 vendor/                     ExcelJS 本機副本（可選）
 icons/                      圖示
 啟動小程式.command           在 Mac 上啟動
@@ -279,9 +302,9 @@ icons/                      圖示
 每次改版：把 `js/excel-io.js` 裡的 `VERSION` 和 `index.html` 裡每個 `?v=` 的數字一起加 1。
 畫面右上角會顯示「版本 N」，可以用來確認瀏覽器跑的是不是最新的程式。
 
-每一步做完會把結果放在 `IEApp.state`（第 1 步是 `mpsFiltered`，第 2 步是 `mpsTotals`，第 3 步是 `withP003`，第 4 步是 `withCT`，第 5 步是 `withDemand`，第 6 步是 `withSummary`，第 7 步是 `withRma`，第 8 步是 `withManpower`，第 9 步是 `withReport`），
+每一步做完會把結果放在 `IEApp.state`（第 1 步是 `mpsFiltered`，第 2 步是 `mpsTotals`，第 3 步是 `withP003`，第 4 步是 `withCT`，第 5 步是 `withDemand`，第 6 步是 `withSummary`，第 7 步是 `withRma`，第 8 步是 `withManpower`，第 9 步是 `withReport`，第 10 步是 `withRmaManpower`），
 裡面的 `build()` 會產生一份新的活頁簿，下一步拿來接著加工。
 
 ## 尚未開發
 
-（目前沒有）
+- RMA人力需求各格的內容（公式）

@@ -297,6 +297,10 @@
     els.result = h('div', { class: 'sheet-area' });
     els.preview = h('div', { class: 'sheet-area' });
     els.exportBtn = h('button', { type: 'button', class: 'btn-primary', disabled: true, text: '匯出 Excel', onclick: onExport });
+    els.nextBtn = h('button', {
+      type: 'button', class: 'btn-secondary', disabled: true, text: '下一步：RMA人力需求',
+      onclick: function () { IEApp.go('rma-manpower'); }
+    });
     els.exportNote = h('span', { class: 'export-note', 'aria-live': 'polite' });
 
     panel.appendChild(h('div', { class: 'step-head' },
@@ -316,7 +320,7 @@
       h('li', { class: 'task' },
         h('h2', { text: '總表' }),
         els.summary, els.notes, els.result, els.preview,
-        h('div', { class: 'actions' }, els.exportBtn, els.exportNote))));
+        h('div', { class: 'actions' }, els.exportBtn, els.nextBtn, els.exportNote))));
 
     refresh();
   }
@@ -443,6 +447,7 @@
     var prev = IEApp.state.withManpower;
     IEApp.state.withReport = null;
     els.exportBtn.disabled = true;
+    els.nextBtn.disabled = true;
     els.notes.textContent = '';
     els.result.textContent = '';
     els.preview.textContent = '';
@@ -517,6 +522,7 @@
       inputs: inputs,
       build: function () { return buildWorkbook(src, refs, links, inputs); }
     };
+    els.nextBtn.disabled = false;
   }
 
   // 各列從哪裡抓、抓到的數值；有找不到的回傳 true
