@@ -32,8 +32,8 @@
   var ui = IEApp.ui;
   var h = IEApp.h;
 
-  var STORE_KEY = 'ie-manpower.totals';
-  var STEP1_KEY = 'ie-manpower.step1';
+  var STORE_KEY = IEApp.storeKey('totals');
+  var STEP1_KEY = IEApp.storeKey('step1');
   var REF_SHEET = 'P003';
   var LABELS = { total: 'Total', top: 'Top 3', rest: 'Non-Top 3' };
   var SUFFIX = '_匯總';

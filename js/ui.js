@@ -173,8 +173,8 @@
 
   /* ---------- WIP、各月產量在哪幾行（第 2 步匯總和第 5 步計算需求工時共用） ---------- */
   // 兩個步驟讀寫的是同一份設定，在其中一步改了，另一步也會跟著變，避免兩邊對不起來。
-  var COLUMNS_KEY = 'ie-manpower.columns';
-  var COLUMNS_OLD_KEY = 'ie-manpower.step4';       // 舊版存在這裡，第一次讀的時候搬過來
+  var COLUMNS_KEY = IEApp.storeKey('columns');
+  var COLUMNS_OLD_KEY = IEApp.storeKey('step4');       // 舊版存在這裡，第一次讀的時候搬過來
 
   function readJson(key) {
     try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch (e) { return null; }

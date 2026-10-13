@@ -3,14 +3,20 @@
  * 自己的檔案：有網路時一定向伺服器確認有沒有新版，並更新快取；沒網路時用快取。
  *             （所以改了程式重新整理就會生效）
  * ExcelJS（網路版）：抓過一次就一直用快取。
- * 每次新增檔案時，把檔名加進 SHELL，並把 CACHE 的版本號加 1。
+ * 每次新增檔案時，把檔名加進 SHELL，並把 VERSION 加 1。
+ * 快取名稱開頭是專案代號，新版啟用時只刪「自己專案、但不是目前版本」的舊快取，
+ * 同一個網址底下其他專案的快取不會被刪。
  */
-var CACHE = 'ie-manpower-v25';
+importScripts('js/config.js');                  // 專案代號（PROJECT_ID）寫在這個檔案
+var CONFIG = self.APP_CONFIG;
+var VERSION = 26;                                  // 每次改版加 1（和 excel-io.js 的 VERSION、index.html 的 ?v= 一樣）
+var CACHE = CONFIG.PROJECT_ID + '-v' + VERSION;    // 例如 ie-manpower-3F-image-lens-v26
 var EXCELJS_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
 var SHELL = [
   './',
   'index.html',
   'manifest.webmanifest',
+  'js/config.js',
   'css/style.css',
   'js/excel-io.js',
   'js/app.js',
@@ -30,6 +36,14 @@ var SHELL = [
   'icons/icon-maskable-512.png'
 ];
 
+// 只認「這個專案代號-v數字」的快取（別的專案、或代號只是開頭相同的專案都不算）
+var OWN_CACHE = new RegExp('^' + CONFIG.PROJECT_ID.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '-v\\d+$');
+var LEGACY_CACHE = CONFIG.LEGACY_CACHE_PATTERN ? new RegExp(CONFIG.LEGACY_CACHE_PATTERN) : null;
+function isOldOwnCache(name) {
+  if (name === CACHE) return false;
+  return OWN_CACHE.test(name) || !!(LEGACY_CACHE && LEGACY_CACHE.test(name));
+}
+
 self.addEventListener('install', function (event) {
   event.waitUntil(
     caches.open(CACHE).then(function (cache) {
@@ -46,7 +60,7 @@ self.addEventListener('install', function (event) {
 self.addEventListener('activate', function (event) {
   event.waitUntil(
     caches.keys().then(function (keys) {
-      return Promise.all(keys.filter(function (k) { return k !== CACHE; }).map(function (k) { return caches.delete(k); }));
+      return Promise.all(keys.filter(isOldOwnCache).map(function (k) { return caches.delete(k); }));
     }).then(function () { return self.clients.claim(); })
   );
 });

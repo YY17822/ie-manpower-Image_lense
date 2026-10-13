@@ -27,8 +27,8 @@
   var ui = IEApp.ui;
   var h = IEApp.h;
 
-  var STORE_KEY = 'ie-manpower.step4';       // 鍵名是舊的步驟編號，改掉會讓記住的設定不見，所以沿用
-  var STEP1_KEY = 'ie-manpower.step1';
+  var STORE_KEY = IEApp.storeKey('step4');       // 鍵名是舊的步驟編號，改掉會讓記住的設定不見，所以沿用
+  var STEP1_KEY = IEApp.storeKey('step1');
   var REF_SHEET = 'P003';
   var CT_HEADER = 'CT.';
   var TITLE = '需求工時';

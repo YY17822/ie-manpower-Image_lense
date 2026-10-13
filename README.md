@@ -289,6 +289,7 @@ ExcelJS 4.x 只看到標籤就當成「有」，結果匯出後整張表被畫�
 
 ```
 index.html                  主畫面
+js/config.js                專案代號（快取和記住的設定都用它當開頭）
 manifest.webmanifest        安裝成 App 用的資訊
 sw.js                       離線快取
 css/style.css               樣式
@@ -319,6 +320,21 @@ icons/                      圖示
 
 每一步做完會把結果放在 `IEApp.state`（第 1 步是 `mpsFiltered`，第 2 步是 `mpsTotals`，第 3 步是 `withP003`，第 4 步是 `withCT`，第 5 步是 `withDemand`，第 6 步是 `withSummary`，第 7 步是 `withRma`，第 8 步是 `withManpower`，第 9 步是 `withReport`，第 10 步是 `withRmaManpower`），
 裡面的 `build()` 會產生一份新的活頁簿，下一步拿來接著加工。
+
+## 專案代號與複製成新專案
+
+這個專案的代號是 `ie-manpower-3F-image-lens`，寫在 `js/config.js`（網頁和 `sw.js` 都讀這個檔案）。
+
+- 離線快取的名稱：`ie-manpower-3F-image-lens-v26`（代號 + 版本號，版本號在 `sw.js` 的 `VERSION`）。新版啟用時，只刪「這個代號、但不是目前版本」的舊快取，別的專案的快取不碰。
+- 記住的設定（localStorage）：`ie-manpower-3F-image-lens.step1` 這種名稱，用 `IEApp.storeKey('step1')` 產生。
+- 舊版用的名稱（`ie-manpower.xxx` 設定、`ie-manpower-vNN` 快取）第一次打開新版時會自動搬過來或刪掉，記住的設定不會不見。
+
+複製成新專案時要改的地方：
+
+1. `js/config.js`：`PROJECT_ID` 改成新專案的代號；`LEGACY_STORE_PREFIX`、`LEGACY_CACHE_PATTERN` 改成 `null`。
+2. `manifest.webmanifest`：`name`、`short_name`（最好也換 `theme_color` 或圖示）。
+3. `啟動小程式.command`：`PORT` 改成別的號碼（例如 8766），本機測試時兩個專案才不會是同一個網址。
+4. `sw.js` 的 `VERSION`、`js/excel-io.js` 的 `VERSION`、`index.html` 的 `?v=` 可以從 1 重新開始。
 
 ## 尚未開發
 

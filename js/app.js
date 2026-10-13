@@ -22,6 +22,33 @@
     { id: 'rma-manpower', title: 'RMA人力需求', note: '重工的人力需求' }
   ];
 
+  /* ---------- 這個專案的身分（js/config.js） ---------- */
+  var CONFIG = global.APP_CONFIG || {};
+  var PROJECT_ID = CONFIG.PROJECT_ID || 'ie-manpower';
+
+  // 記住的設定（localStorage）的名稱一律加上專案代號，例如 ie-manpower-3F-image-lens.step1，
+  // 同一個網址底下的其他專案才不會讀到或蓋掉這裡的設定。
+  function storeKey(name) { return PROJECT_ID + '.' + name; }
+
+  // 舊版的設定名稱（ie-manpower.xxx）搬到新名稱，搬完把舊的刪掉。
+  // 一定要在各步驟讀設定之前做，所以放在 app.js 一載入就執行。
+  (function migrateOldSettings() {
+    var old = CONFIG.LEGACY_STORE_PREFIX;
+    if (!old) return;
+    try {
+      var keys = [];
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (k && k.indexOf(old) === 0) keys.push(k);
+      }
+      keys.forEach(function (k) {
+        var nk = storeKey(k.slice(old.length));
+        if (localStorage.getItem(nk) === null) localStorage.setItem(nk, localStorage.getItem(k));
+        localStorage.removeItem(k);
+      });
+    } catch (e) { /* 瀏覽器不讓用 localStorage 就算了 */ }
+  })();
+
   var registry = {};
   var currentId = null;
 
@@ -128,6 +155,8 @@
 
   var IEApp = {
     state: {},          // 各步驟的成果放這裡，下一步直接拿來用
+    projectId: PROJECT_ID,
+    storeKey: storeKey,
     h: h,
     registerStep: registerStep,
     go: go,

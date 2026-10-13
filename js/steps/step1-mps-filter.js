@@ -17,7 +17,7 @@
   var ui = IEApp.ui;
   var h = IEApp.h;
 
-  var STORE_KEY = 'ie-manpower.step1';
+  var STORE_KEY = IEApp.storeKey('step1');
   var PREVIEW_ROWS = 8;     // 預覽顯示幾列資料
   var MAX_CHIPS = 24;
 
