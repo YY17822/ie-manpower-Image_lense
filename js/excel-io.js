@@ -2360,6 +2360,8 @@
    * 在活頁簿裡建立「RMA人力需求」工作表（已經有的話先刪掉重建）。
    * o.cutoff     右上角的 Cut-off 文字，例如 'Cut-off: 2026/10/13Ver:A'
    * o.monthRefs  各月表頭要參照的儲存格 [{ sheet, col, row, text }]（參照總表的月份）
+   * o.links      各列要參照的儲存格 { hours: [{ sheet, col, row, value, numFmt }], weekdays: […], … }
+   * o.qty        MPS (PCS) 那一列：各月 RMA 數量 [[120, 300], [80, 0], …]，填公式 =120+300
    * 回傳 { worksheet, rows: { hours: 6, … }, monthCol, months }
    */
   function addRmaManpowerSheet(wb, o) {
@@ -2442,8 +2444,58 @@
       if (d.merge) ws.mergeCellsWithoutStyle(d.row, R.firstCol, d.row, R.unitCol);
     });
 
+    // MPS (PCS)：各月 RMA 項目的數量相加
+    (o.qty || []).slice(0, R.months).forEach(function (list, m) {
+      if (!list || !list.length) return;
+      var total = list.reduce(function (x, y) { return x + y; }, 0);
+      var cell = ws.getCell(rows.section, R.monthCol + m);
+      cell.value = { formula: list.join('+'), result: total };
+      cell.numFmt = INTEGER_FORMAT;
+    });
+    // 參照其他工作表的列（MPS 的 RMA總需求工時、總表的輸入）
+    var links = o.links || {};
+    Object.keys(links).forEach(function (key) {
+      if (!rows[key]) return;
+      (links[key] || []).slice(0, R.months).forEach(function (ref, m) {
+        if (!ref) return;
+        var f = { formula: sheetRef(ref.sheet) + numToCol(ref.col) + ref.row };
+        if (isNum(ref.value)) f.result = ref.value;
+        var cell = ws.getCell(rows[key], R.monthCol + m);
+        cell.value = f;
+        cell.numFmt = ref.numFmt || 'General';
+      });
+    });
+
     wb.calcProperties = Object.assign({}, wb.calcProperties, { fullCalcOnLoad: true });
     return { worksheet: ws, rows: rows, monthCol: R.monthCol, months: R.months };
+  }
+
+  /*
+   * 從 MPS 工作表第 7 步的 RMA 區塊讀出各項目各月的數量。
+   * 項目那幾列的公式是 =120*L81（數量 × CT.），數量就是 * 前面的數字。
+   *   link  findReportLinks(...).hoursRework（RMA總需求工時那一列的位置和各月的行）
+   * 回傳 { items: ['鏡片重工', …], qty: [[120, 300], …（每個月一組）], bad: 讀不懂的格子數 }
+   */
+  function readRmaQuantities(main, link) {
+    var out = { items: [], qty: [], bad: 0 };
+    if (!link || !link.found) return out;
+    var cols = link.refs.map(function (r) { return r.col; });
+    cols.forEach(function () { out.qty.push([]); });
+    for (var r = link.row + 1; ; r++) {
+      var row = main.findRow(r);
+      var label = row ? row.findCell(link.labelCol) : null;
+      var name = label ? normalizeText(displayText(label)) : '';
+      if (!name) break;
+      out.items.push(name);
+      cols.forEach(function (c, i) {
+        var v = cellRawValue(row.findCell(c));
+        var f = v && typeof v === 'object' && v.formula !== undefined ? String(v.formula) : null;
+        var m = f ? /^\s*(-?\d+(?:\.\d+)?)\s*\*/.exec(f) : null;
+        if (m) out.qty[i].push(Number(m[1]));
+        else out.bad++;
+      });
+    }
+    return out;
   }
 
   function sameSheetName(a, b) { return String(a).toLowerCase() === String(b).toLowerCase(); }
@@ -2457,7 +2509,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 23,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 24,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,
@@ -2507,6 +2559,7 @@
     RMA_LAYOUT: RMA_LAYOUT,
     RMA_ROWS: RMA_ROWS,
     addRmaManpowerSheet: addRmaManpowerSheet,
+    readRmaQuantities: readRmaQuantities,
     REPORT_SECOND_OFFSET: REPORT_SECOND_OFFSET,
     findReportLinks: findReportLinks,
     toNumber: toNumber,
