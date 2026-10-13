@@ -19,6 +19,7 @@
  *     工作時間         ='總表'!D10
  *     綜合效率%       ='總表'!D13（Non-Top 3 機種）
  *     出勤率%         ='總表'!D14
+ *     需求人力 On line  =D6/(D7+D8)/(D9+D10)/D11/D12，顯示到小數點第二位
  *   其他列之後再補。
  *
  *   來源有兩種：
@@ -289,7 +290,7 @@
     var names = work.wb.worksheets.map(function (w) { return w.name; });
     var replacing = src.kind === 'file' && S.upload.sheets.some(function (n) { return sameName(n, SHEET_NAME); });
     var text = '匯出的檔案有 ' + names.length + ' 個工作表：' + names.join('、') + '。「' + SHEET_NAME +
-      '」已經填好 MPS (PCS)、需求工時、平日工作天數、工作時間、綜合效率%、出勤率%，其他列之後再補。';
+      '」已經填好 MPS (PCS)、需求工時、平日工作天數、工作時間、綜合效率%、出勤率%、需求人力，假日工作天數和加班時間之後再補。';
     if (replacing) text += ' 檔案裡原本的「' + SHEET_NAME + '」工作表會重新建立。';
     setSummary(text, false, replacing);
 

@@ -2466,6 +2466,24 @@
       });
     });
 
+    // 需求人力 On line = 需求工時 ÷（平日 + 假日工作天數）÷（工作時間 + 加班時間）÷ 綜合效率% ÷ 出勤率%
+    // 顯示到小數點第二位
+    function rnum(key, m) {
+      var v = plainValue(cellRawValue(ws.getCell(rows[key], R.monthCol + m)));
+      return typeof v === 'number' ? v : (v === null || v === undefined || v === '' ? 0 : NaN);
+    }
+    for (var m = 0; m < R.months; m++) {
+      var L = numToCol(R.monthCol + m);
+      var a = function (key) { return L + rows[key]; };
+      var f = a('hours') + '/(' + a('weekdays') + '+' + a('holidays') + ')/(' + a('workMinutes') + '+' +
+        a('overtimeMinutes') + ')/' + a('efficiency') + '/' + a('attendance');
+      var res = rnum('hours', m) / (rnum('weekdays', m) + rnum('holidays', m)) /
+        (rnum('workMinutes', m) + rnum('overtimeMinutes', m)) / rnum('efficiency', m) / rnum('attendance', m);
+      var on = ws.getCell(rows.needOnline, R.monthCol + m);
+      on.value = isFinite(res) ? { formula: f, result: res } : { formula: f };
+      on.numFmt = '#,##0.00';
+    }
+
     wb.calcProperties = Object.assign({}, wb.calcProperties, { fullCalcOnLoad: true });
     return { worksheet: ws, rows: rows, monthCol: R.monthCol, months: R.months };
   }
@@ -2509,7 +2527,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 24,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 25,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,
