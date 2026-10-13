@@ -1945,6 +1945,12 @@
   var OVERTIME_LIMIT = 46;     // 法定加班上限（小時/人/月）
   var WEEKDAY_OT_HOURS = 2;    // 平日每天加班 2 小時
   var DAY_HOURS = 8;           // 一天工作 8 小時
+  var YO_LIMIT_DEFAULT = 78;   // 第二張表：YO 加班上限（小時/人/月），畫面上可以改
+  var REPORT_SECOND_OFFSET = 26;   // 第二張表在第一張下面空三列（第一張是第 2–24 列，第二張從第 28 列開始）
+  // 第二張表直接參照第一張表的列（其他列是第二張表自己算）
+  var REPORT_SECOND_COPY = ['section', 'hoursTop3', 'hoursNonTop3', 'hoursRework', 'weekdays', 'workMinutes',
+    'overtimeMinutes', 'effTop3', 'effNonTop3', 'attendance', 'needOffDirect', 'needOffIndirect',
+    'haveOnline', 'haveOffDirect', 'haveOffIndirect'];
   // 需求人力 Off line 的人員種類（之後要增減種類改這裡）
   var REPORT_OFFLINE = {
     offDirect: ['文書', '物料', '材製損', '包裝', '領班'],
@@ -2060,6 +2066,8 @@
    *                otHours      每日加班幾小時
    *                otRate       加班出勤人數 %（例如 80 代表 80%）
    *                offDirect / offIndirect   各種人員的人數，順序同 REPORT_OFFLINE（null = 沒填）
+   * o.yoLimit    第二張表（第 28 列起）的 YO 加班上限，預設 78；第二張表的假日工作天數 =(78-D34*2)/8，
+   *              其他輸入和抓來的數值參照第一張表（例如 D34 =D8）
    *              假日工作天數一律填公式 =(46-D8*2)/8；加班時間填公式 =2*60*80%（兩個數字都有才填），備註寫輸入的數值
    * 回傳 { worksheet, rows: { hoursTop3: 5, … }, monthCol, months }
    */
@@ -2073,243 +2081,258 @@
     var C = REPORT_COLOR;
     var lastMonth = R.monthCol + R.months - 1;
     var THIN = { style: 'thin' }, THICK = { style: 'medium' };
+    var LEFT = { horizontal: 'left', vertical: 'middle' };
+    var CENTER = { horizontal: 'center', vertical: 'middle' };
+    var yoLimit = isNum(o.yoLimit) ? o.yoLimit : YO_LIMIT_DEFAULT;
+    var OFF2 = REPORT_SECOND_OFFSET;                       // 第二張表往下移幾列
+    var bottom = R.lastRow + OFF2;
 
-    // 行寬、列高
+    // 整張總表都用微軟正黑體（charset 136 = 繁體中文）
+    function font(extra) { return Object.assign({ name: REPORT_FONT, size: 12, charset: 136 }, extra); }
+
+    // 行寬；表格外的空白格子也設成微軟正黑體，之後在旁邊打字字型才一致
     ws.getColumn(1).width = 6;
     ws.getColumn(R.firstCol).width = 24;
     ws.getColumn(R.unitCol).width = 17;    // 要放得下「Off line_直接」「小計(on+off)」，不然字會跑到 D 行
     for (var mc = R.monthCol; mc <= lastMonth; mc++) ws.getColumn(mc).width = 10;
     ws.getColumn(R.noteCol).width = 56;
-    // 表格外的空白格子也設成微軟正黑體，之後在旁邊打字字型才一致
     for (var fc = 1; fc <= R.noteCol + 1; fc++) ws.getColumn(fc).font = font();
-    for (var fr = 1; fr <= R.lastRow + 1; fr++) {
+    for (var fr = 1; fr <= bottom + 1; fr++) {
       for (fc = 1; fc <= R.noteCol + 1; fc++) ws.getCell(fr, fc).font = font();
     }
-    ws.getRow(R.noteRow).height = 24;
-    ws.getRow(R.headRow).height = 21;
-    for (var hr = R.headRow + 1; hr <= R.lastRow; hr++) ws.getRow(hr).height = 18;
 
-    // 外框粗線、裡面細線；Loading Rate 那一列上面也是粗線
-    function border(r, c) {
-      return {
-        top: r === R.headRow || r === R.lastRow ? THICK : THIN,
-        bottom: r === R.lastRow || r === R.lastRow - 1 ? THICK : THIN,
-        left: c === R.firstCol ? THICK : THIN,
-        right: c === R.noteCol ? THICK : THIN
-      };
-    }
-    // 整張總表都用微軟正黑體（charset 136 = 繁體中文）
-    function font(extra) { return Object.assign({ name: REPORT_FONT, size: 12, charset: 136 }, extra); }
-    var LEFT = { horizontal: 'left', vertical: 'middle' };
-    var CENTER = { horizontal: 'center', vertical: 'middle' };
+    /* ----- 畫一張表的外框、底色、標籤（off = 往下移幾列），回傳各列的列號 ----- */
+    function drawFrame(off, title) {
+      var noteRow = R.noteRow + off, headRow = R.headRow + off, lastRow = R.lastRow + off;
+      ws.getRow(noteRow).height = 24;
+      ws.getRow(headRow).height = 21;
+      for (var hr = headRow + 1; hr <= lastRow; hr++) ws.getRow(hr).height = 18;
 
-    // 第 2 列：法定加班上限（紅底白字，B、C 合併）
-    var note = ws.getCell(R.noteRow, R.firstCol);
-    note.value = '法定加班上限46hr/人';
-    ws.mergeCells(R.noteRow, R.firstCol, R.noteRow, R.unitCol);
-    ws.getCell(R.noteRow, R.firstCol).style = {
-      font: font({ bold: true, color: { argb: C.white } }), fill: solid(C.red), alignment: LEFT
-    };
-    ws.getCell(R.noteRow, R.unitCol).style = { font: font(), fill: solid(C.red) };
-
-    // 第 3 列：表頭（深藍底白字；B、C 合併，畫一條斜線）
-    for (var c = R.firstCol; c <= R.noteCol; c++) {
-      var b = border(R.headRow, c);
-      if (c <= R.unitCol) b.diagonal = { up: false, down: true, style: 'medium', color: { argb: 'FF000000' } };
-      ws.getCell(R.headRow, c).style = {
-        font: font({ size: 14, bold: true, color: { argb: C.white } }),
-        fill: solid(C.head), alignment: CENTER, border: b
-      };
-    }
-    ws.mergeCellsWithoutStyle(R.headRow, R.firstCol, R.headRow, R.unitCol);
-    var refs = o.monthRefs || [];
-    for (var i = 0; i < R.months; i++) {
-      var ref = refs[i];
-      if (ref && ref.sheet && ref.col && ref.row) {
-        ws.getCell(R.headRow, R.monthCol + i).value = {
-          formula: sheetRef(ref.sheet) + numToCol(ref.col) + ref.row,
-          result: ref.text || ''
+      // 外框粗線、裡面細線；Loading Rate 那一列上面也是粗線
+      function border(r, c) {
+        return {
+          top: r === headRow || r === lastRow ? THICK : THIN,
+          bottom: r === lastRow || r === lastRow - 1 ? THICK : THIN,
+          left: c === R.firstCol ? THICK : THIN,
+          right: c === R.noteCol ? THICK : THIN
         };
       }
-    }
-    ws.getCell(R.headRow, R.noteCol).value = '備註';
 
-    // 第 4 到 24 列
-    var rows = {};
-    var groupTop = 0;
-    REPORT_ROWS.forEach(function (d, k) {
-      rows[d.key] = d.row;
-      var fill = d.section ? solid(C.section) : d.loading ? solid(C.loading) : null;
-      var color = d.navy ? { argb: C.navy } : undefined;
-      for (var c = R.firstCol; c <= R.noteCol; c++) {
-        var f = fill;
-        if (d.subtotal && c >= R.unitCol) f = solid(C.subtotal);
-        var st = { border: border(d.row, c), alignment: c <= R.unitCol ? LEFT : CENTER, font: font({ color: color }) };
-        if (f) st.fill = f;
-        if (c <= R.unitCol) st.font = font({ bold: true, color: color, size: d.section ? 14 : 12 });
-        ws.getCell(d.row, c).style = st;
-      }
-      if (d.label) ws.getCell(d.row, R.firstCol).value = d.label;
-      if (d.unit) ws.getCell(d.row, R.unitCol).value = d.unit;
-      if (d.merge) ws.mergeCellsWithoutStyle(d.row, R.firstCol, d.row, R.unitCol);
-
-      // 需求人力、現有人力：B 行往下合併到這一組的最後一列
-      if (d.group) {
-        groupTop = d.row;
-        var g = ws.getCell(d.row, R.firstCol);
-        g.value = d.group;
-        g.style = Object.assign({}, g.style, {
-          font: font({ color: color }),
-          alignment: { horizontal: 'left', vertical: 'middle', wrapText: true }
-        });
-      }
-      var nextRow = REPORT_ROWS[k + 1];
-      if (groupTop && (!nextRow || nextRow.group || !nextRow.unit || nextRow.label)) {
-        if (d.row > groupTop) ws.mergeCellsWithoutStyle(groupTop, R.firstCol, d.row, R.firstCol);
-        groupTop = 0;
-      }
-    });
-
-    // 各列的數值：公式參照 MPS 工作表，只顯示整數
-    var links = o.links || {};
-    Object.keys(links).forEach(function (key) {
-      var r = rows[key];
-      if (!r) return;
-      (links[key] || []).slice(0, R.months).forEach(function (ref, i) {
-        var cell = ws.getCell(r, R.monthCol + i);
-        var f = { formula: sheetRef(ref.sheet) + numToCol(ref.col) + ref.row };
-        if (ref.value !== null && ref.value !== undefined) f.result = ref.value;
-        cell.value = f;
-        cell.numFmt = ref.numFmt || INTEGER_FORMAT;
-      });
-    });
-
-    // 使用者輸入的列，以及由它們算出來的列
-    var inp = o.inputs || {};
-    function monthCell(key, i) { return ws.getCell(rows[key], R.monthCol + i); }
-    for (var m = 0; m < R.months; m++) {
-      var L = numToCol(R.monthCol + m);
-      var wd = inp.weekdays ? inp.weekdays[m] : null;
-      if (wd !== null && wd !== undefined) {
-        monthCell('weekdays', m).value = wd;
-        monthCell('weekdays', m).numFmt = 'General';
-      }
-      // 假日工作天數 =（法定加班上限 46 小時 − 平日工作天數 × 每日加班 2 小時）÷ 每天 8 小時
-      var hd = monthCell('holidays', m);
-      hd.value = {
-        formula: '(' + OVERTIME_LIMIT + '-' + L + rows.weekdays + '*' + WEEKDAY_OT_HOURS + ')/' + DAY_HOURS,
-        result: (OVERTIME_LIMIT - (wd || 0) * WEEKDAY_OT_HOURS) / DAY_HOURS
+      // 加班上限（紅底白字，B、C 合併）
+      ws.getCell(noteRow, R.firstCol).value = title;
+      ws.mergeCells(noteRow, R.firstCol, noteRow, R.unitCol);
+      ws.getCell(noteRow, R.firstCol).style = {
+        font: font({ bold: true, color: { argb: C.white } }), fill: solid(C.red), alignment: LEFT
       };
-      hd.numFmt = '0.00';
-      var wm = inp.workMinutes ? inp.workMinutes[m] : null;
-      if (wm !== null && wm !== undefined) {
-        monthCell('workMinutes', m).value = wm;
-        monthCell('workMinutes', m).numFmt = INTEGER_FORMAT;
+      ws.getCell(noteRow, R.unitCol).style = { font: font(), fill: solid(C.red) };
+
+      // 表頭（深藍底白字；B、C 合併，畫一條斜線）
+      for (var c = R.firstCol; c <= R.noteCol; c++) {
+        var b = border(headRow, c);
+        if (c <= R.unitCol) b.diagonal = { up: false, down: true, style: 'medium', color: { argb: 'FF000000' } };
+        ws.getCell(headRow, c).style = {
+          font: font({ size: 14, bold: true, color: { argb: C.white } }),
+          fill: solid(C.head), alignment: CENTER, border: b
+        };
       }
-      // 綜合效率、出勤率：輸入 80 存成 0.8，格式顯示成 80%
-      ['effTop3', 'effNonTop3', 'attendance'].forEach(function (key) {
-        var v = inp[key] ? inp[key][m] : null;
-        if (!isNum(v)) return;
-        var pc = monthCell(key, m);
-        pc.value = Math.round(v * 1e6) / 1e8;
-        pc.numFmt = Math.round(v) === v ? '0%' : '0.0%';
+      ws.mergeCellsWithoutStyle(headRow, R.firstCol, headRow, R.unitCol);
+      ws.getCell(headRow, R.noteCol).value = '備註';
+
+      // 各列
+      var rows = { noteRow: noteRow, headRow: headRow };
+      var groupTop = 0;
+      REPORT_ROWS.forEach(function (d, k) {
+        var r = d.row + off;
+        rows[d.key] = r;
+        var fill = d.section ? solid(C.section) : d.loading ? solid(C.loading) : null;
+        var color = d.navy ? { argb: C.navy } : undefined;
+        for (var c = R.firstCol; c <= R.noteCol; c++) {
+          var f = fill;
+          if (d.subtotal && c >= R.unitCol) f = solid(C.subtotal);
+          var st = { border: border(r, c), alignment: c <= R.unitCol ? LEFT : CENTER, font: font({ color: color }) };
+          if (f) st.fill = f;
+          if (c <= R.unitCol) st.font = font({ bold: true, color: color, size: d.section ? 14 : 12 });
+          ws.getCell(r, c).style = st;
+        }
+        if (d.label) ws.getCell(r, R.firstCol).value = d.label;
+        if (d.unit) ws.getCell(r, R.unitCol).value = d.unit;
+        if (d.merge) ws.mergeCellsWithoutStyle(r, R.firstCol, r, R.unitCol);
+
+        // 需求人力、現有人力：B 行往下合併到這一組的最後一列
+        if (d.group) {
+          groupTop = r;
+          var g = ws.getCell(r, R.firstCol);
+          g.value = d.group;
+          g.style = Object.assign({}, g.style, {
+            font: font({ color: color }),
+            alignment: { horizontal: 'left', vertical: 'middle', wrapText: true }
+          });
+        }
+        var nextRow = REPORT_ROWS[k + 1];
+        if (groupTop && (!nextRow || nextRow.group || !nextRow.unit || nextRow.label)) {
+          if (r > groupTop) ws.mergeCellsWithoutStyle(groupTop, R.firstCol, r, R.firstCol);
+          groupTop = 0;
+        }
       });
-      // 加班時間（分/天）= 每日加班小時 × 60 × 加班出勤人數 %
-      if (isNum(inp.otHours) && isNum(inp.otRate)) {
-        var ot = monthCell('overtimeMinutes', m);
-        ot.value = { formula: inp.otHours + '*60*' + inp.otRate + '%', result: inp.otHours * 60 * inp.otRate / 100 };
-        ot.numFmt = 'General';
-      }
+      return rows;
     }
-    if (isNum(inp.otHours) || isNum(inp.otRate)) {
-      var note = ws.getCell(rows.overtimeMinutes, R.noteCol);
-      note.value = '每日加班 ' + (isNum(inp.otHours) ? inp.otHours : '?') + ' 小時 × 60 × 加班出勤人數 ' +
-        (isNum(inp.otRate) ? inp.otRate : '?') + '%';
-      note.alignment = { horizontal: 'left', vertical: 'middle' };
+
+    function cellOf(rows, key, m) { return ws.getCell(rows[key], R.monthCol + m); }
+    function addr(rows, key, m) { return numToCol(R.monthCol + m) + rows[key]; }
+    function num(rows, key, m) {
+      var v = plainValue(cellRawValue(cellOf(rows, key, m)));
+      return typeof v === 'number' ? v : (v === null || v === undefined ? 0 : NaN);
     }
-    function setNote(key, text) {
+    function setFormula(cell, formula, result, fmt) {
+      cell.value = isNum(result) && isFinite(result) ? { formula: formula, result: result } : { formula: formula };
+      cell.numFmt = fmt;
+    }
+    function setNote(rows, key, text) {
       var c = ws.getCell(rows[key], R.noteCol);
       c.value = text;
       c.alignment = { horizontal: 'left', vertical: 'middle' };
     }
 
+    /* ----- 由其他列算出來的列（兩張表都一樣，只有加班上限不同） ----- */
+    function fillComputed(rows, limit) {
+      for (var m = 0; m < R.months; m++) {
+        var a = function (key) { return addr(rows, key, m); };
+        var n = function (key) { return num(rows, key, m); };
+
+        // 假日工作天數 =（加班上限 − 平日工作天數 × 每日加班 2 小時）÷ 每天 8 小時
+        setFormula(cellOf(rows, 'holidays', m),
+          '(' + limit + '-' + a('weekdays') + '*' + WEEKDAY_OT_HOURS + ')/' + DAY_HOURS,
+          (limit - n('weekdays') * WEEKDAY_OT_HOURS) / DAY_HOURS, '0.00');
+
+        // 需求人力 On line：
+        //   Top 3     需求工時 ÷（平日+假日天數）÷（工作時間+加班時間）÷ Top-3 效率 ÷ 出勤率
+        //   Non-Top 3 需求工時 ÷（平日+假日天數）÷（工作時間+加班時間）÷ Non-Top 3 效率 ÷ 出勤率
+        //   重工      需求工時 ÷ 平日天數 ÷ 工作時間 ÷ Non-Top 3 效率 ÷ 出勤率
+        var days = '(' + a('weekdays') + '+' + a('holidays') + ')';
+        var mins = '(' + a('workMinutes') + '+' + a('overtimeMinutes') + ')';
+        var f = a('hoursTop3') + '/' + days + '/' + mins + '/' + a('effTop3') + '/' + a('attendance') + '+' +
+          a('hoursNonTop3') + '/' + days + '/' + mins + '/' + a('effNonTop3') + '/' + a('attendance') + '+' +
+          a('hoursRework') + '/' + a('weekdays') + '/' + a('workMinutes') + '/' + a('effNonTop3') + '/' + a('attendance');
+        var d = n('weekdays') + n('holidays');
+        var t = n('workMinutes') + n('overtimeMinutes');
+        var res = n('hoursTop3') / d / t / n('effTop3') / n('attendance') +
+          n('hoursNonTop3') / d / t / n('effNonTop3') / n('attendance') +
+          n('hoursRework') / n('weekdays') / n('workMinutes') / n('effNonTop3') / n('attendance');
+        setFormula(cellOf(rows, 'needOnline', m), f, res, '#,##0.0');
+
+        // 需求人力小計 = On line + Off line_直接（不含 Off line_間接）
+        setFormula(cellOf(rows, 'needSubtotal', m), a('needOnline') + '+' + a('needOffDirect'),
+          n('needOnline') + n('needOffDirect'), '#,##0.0');
+        // 現有人力小計 = On line + Off line_直接（不含 Off line_間接）
+        setFormula(cellOf(rows, 'haveSubtotal', m), a('haveOnline') + '+' + a('haveOffDirect'),
+          n('haveOnline') + n('haveOffDirect'), 'General');
+        // 人力需求差異 = 現有人力小計 − 需求人力小計；Loading Rate = 現有人力小計 ÷ 需求人力小計
+        var hv = n('haveSubtotal'), nv = n('needSubtotal');
+        setFormula(cellOf(rows, 'gap', m), a('haveSubtotal') + '-' + a('needSubtotal'), hv - nv, '#,##0.0');
+        setFormula(cellOf(rows, 'loading', m), a('haveSubtotal') + '/' + a('needSubtotal'), nv ? hv / nv : NaN, '0%');
+      }
+      setNote(rows, 'needSubtotal', '不含Off line_間接');
+      setNote(rows, 'haveSubtotal', '不含Off line_間接');
+    }
+
+    /* ===== 第一張表：法定加班上限 46 小時 ===== */
+    var rows = drawFrame(0, '法定加班上限' + OVERTIME_LIMIT + 'hr/人');
+
+    // 月份表頭：參照 MPS 工作表需求工時的月份
+    var refs = o.monthRefs || [];
+    for (var i = 0; i < R.months; i++) {
+      var ref = refs[i];
+      if (ref && ref.sheet && ref.col && ref.row) {
+        ws.getCell(rows.headRow, R.monthCol + i).value = {
+          formula: sheetRef(ref.sheet) + numToCol(ref.col) + ref.row,
+          result: ref.text || ''
+        };
+      }
+    }
+
+    // 從其他工作表抓的列（MPS、人力）
+    var links = o.links || {};
+    Object.keys(links).forEach(function (key) {
+      if (!rows[key]) return;
+      (links[key] || []).slice(0, R.months).forEach(function (ref, i) {
+        var f = { formula: sheetRef(ref.sheet) + numToCol(ref.col) + ref.row };
+        if (ref.value !== null && ref.value !== undefined) f.result = ref.value;
+        var cell = cellOf(rows, key, i);
+        cell.value = f;
+        cell.numFmt = ref.numFmt || INTEGER_FORMAT;
+      });
+    });
+
+    // 使用者輸入的列
+    var inp = o.inputs || {};
+    for (var m = 0; m < R.months; m++) {
+      var wd = inp.weekdays ? inp.weekdays[m] : null;
+      if (isNum(wd)) {
+        cellOf(rows, 'weekdays', m).value = wd;
+        cellOf(rows, 'weekdays', m).numFmt = 'General';
+      }
+      var wm = inp.workMinutes ? inp.workMinutes[m] : null;
+      if (isNum(wm)) {
+        cellOf(rows, 'workMinutes', m).value = wm;
+        cellOf(rows, 'workMinutes', m).numFmt = INTEGER_FORMAT;
+      }
+      // 綜合效率、出勤率：輸入 80 存成 0.8，格式顯示成 80%
+      ['effTop3', 'effNonTop3', 'attendance'].forEach(function (key) {
+        var v = inp[key] ? inp[key][m] : null;
+        if (!isNum(v)) return;
+        var pc = cellOf(rows, key, m);
+        pc.value = Math.round(v * 1e6) / 1e8;
+        pc.numFmt = Math.round(v) === v ? '0%' : '0.0%';
+      });
+      // 加班時間（分/天）= 每日加班小時 × 60 × 加班出勤人數 %
+      if (isNum(inp.otHours) && isNum(inp.otRate)) {
+        setFormula(cellOf(rows, 'overtimeMinutes', m), inp.otHours + '*60*' + inp.otRate + '%',
+          inp.otHours * 60 * inp.otRate / 100, 'General');
+      }
+    }
+    if (isNum(inp.otHours) || isNum(inp.otRate)) {
+      setNote(rows, 'overtimeMinutes', '每日加班 ' + (isNum(inp.otHours) ? inp.otHours : '?') +
+        ' 小時 × 60 × 加班出勤人數 ' + (isNum(inp.otRate) ? inp.otRate : '?') + '%');
+    }
+
     // 需求人力 Off line_直接、Off line_間接：各種人員的人數相加（每個月一樣），備註寫各種人數
-    var offTotals = {};
     [['needOffDirect', 'offDirect'], ['needOffIndirect', 'offIndirect']].forEach(function (pair) {
       var key = pair[0], cats = REPORT_OFFLINE[pair[1]], counts = inp[pair[1]] || [];
       if (!counts.some(isNum)) return;
       var nums = cats.map(function (c, i) { return isNum(counts[i]) ? counts[i] : 0; });
-      var total = nums.reduce(function (a, b) { return a + b; }, 0);
-      offTotals[key] = total;
-      for (var m = 0; m < R.months; m++) {
-        var cell = monthCell(key, m);
-        cell.value = { formula: nums.join('+'), result: total };
-        cell.numFmt = 'General';
-      }
-      setNote(key, cats.map(function (c, i) { return c + ' ' + nums[i]; }).join('、'));
+      var total = nums.reduce(function (x, y) { return x + y; }, 0);
+      for (var m = 0; m < R.months; m++) setFormula(cellOf(rows, key, m), nums.join('+'), total, 'General');
+      setNote(rows, key, cats.map(function (c, i) { return c + ' ' + nums[i]; }).join('、'));
     });
 
-    // 需求人力 On line：
-    //   Top 3     需求工時 ÷（平日+假日天數）÷（工作時間+加班時間）÷ Top-3 效率 ÷ 出勤率
-    //   Non-Top 3 需求工時 ÷（平日+假日天數）÷（工作時間+加班時間）÷ Non-Top 3 效率 ÷ 出勤率
-    //   重工      需求工時 ÷ 平日天數 ÷ 工作時間 ÷ Non-Top 3 效率 ÷ 出勤率
-    function num(key, m) {
-      var v = cellRawValue(monthCell(key, m));
-      v = plainValue(v);
-      return typeof v === 'number' ? v : (v === null || v === undefined ? 0 : NaN);
-    }
-    for (var n = 0; n < R.months; n++) {
-      var C2 = numToCol(R.monthCol + n);
-      var a = function (key) { return C2 + rows[key]; };
-      var days = '(' + a('weekdays') + '+' + a('holidays') + ')';
-      var mins = '(' + a('workMinutes') + '+' + a('overtimeMinutes') + ')';
-      var f = a('hoursTop3') + '/' + days + '/' + mins + '/' + a('effTop3') + '/' + a('attendance') + '+' +
-        a('hoursNonTop3') + '/' + days + '/' + mins + '/' + a('effNonTop3') + '/' + a('attendance') + '+' +
-        a('hoursRework') + '/' + a('weekdays') + '/' + a('workMinutes') + '/' + a('effNonTop3') + '/' + a('attendance');
-      var d = num('weekdays', n) + num('holidays', n);
-      var t = num('workMinutes', n) + num('overtimeMinutes', n);
-      var res = num('hoursTop3', n) / d / t / num('effTop3', n) / num('attendance', n) +
-        num('hoursNonTop3', n) / d / t / num('effNonTop3', n) / num('attendance', n) +
-        num('hoursRework', n) / num('weekdays', n) / num('workMinutes', n) / num('effNonTop3', n) / num('attendance', n);
-      var on = monthCell('needOnline', n);
-      on.value = isFinite(res) ? { formula: f, result: res } : { formula: f };
-      on.numFmt = '#,##0.0';
+    fillComputed(rows, OVERTIME_LIMIT);
 
-      // 需求人力小計 = On line + Off line_直接（不含 Off line_間接）
-      var sub = monthCell('needSubtotal', n);
-      var subRes = isFinite(res) ? res + (offTotals.needOffDirect || 0) : null;
-      sub.value = subRes === null ? { formula: a('needOnline') + '+' + a('needOffDirect') }
-        : { formula: a('needOnline') + '+' + a('needOffDirect'), result: subRes };
-      sub.numFmt = '#,##0.0';
+    /* ===== 第二張表：YO 加班上限（預設 78 小時，可在畫面上改） =====
+     * 和第一張表一樣，只有假日工作天數改用 YO 的加班上限；
+     * 其他輸入、抓來的數值都參照第一張表（例如 =D8），上面改了下面會跟著變。 */
+    var rows2 = drawFrame(OFF2, 'YO加班上限' + yoLimit + 'hr/人');
+    for (i = 0; i < R.months; i++) {
+      var head1 = ws.getCell(rows.headRow, R.monthCol + i);
+      if (head1.value === null || head1.value === undefined) continue;
+      ws.getCell(rows2.headRow, R.monthCol + i).value = {
+        formula: numToCol(R.monthCol + i) + rows.headRow,
+        result: plainValue(cellRawValue(head1)) || ''
+      };
     }
-    setNote('needSubtotal', '不含Off line_間接');
-
-    // 現有人力小計 = On line + Off line_直接（不含 Off line_間接）
-    for (var k = 0; k < R.months; k++) {
-      var CK = numToCol(R.monthCol + k);
-      var hs = monthCell('haveSubtotal', k);
-      var hv = num('haveOnline', k) + num('haveOffDirect', k);
-      var hf = CK + rows.haveOnline + '+' + CK + rows.haveOffDirect;
-      hs.value = isFinite(hv) ? { formula: hf, result: hv } : { formula: hf };
-      hs.numFmt = 'General';
-    }
-    setNote('haveSubtotal', '不含Off line_間接');
-
-    // 人力需求差異 = 現有人力小計 − 需求人力小計；Loading Rate = 現有人力小計 ÷ 需求人力小計
-    for (var g = 0; g < R.months; g++) {
-      var CG = numToCol(R.monthCol + g);
-      var have = CG + rows.haveSubtotal, need = CG + rows.needSubtotal;
-      var hv2 = num('haveSubtotal', g), nv2 = num('needSubtotal', g);
-      var gap = monthCell('gap', g);
-      gap.value = isFinite(hv2 - nv2) ? { formula: have + '-' + need, result: hv2 - nv2 } : { formula: have + '-' + need };
-      gap.numFmt = '#,##0.0';
-      var lr = monthCell('loading', g);
-      lr.value = nv2 && isFinite(hv2 / nv2) ? { formula: have + '/' + need, result: hv2 / nv2 } : { formula: have + '/' + need };
-      lr.numFmt = '0%';
-    }
+    REPORT_SECOND_COPY.forEach(function (key) {
+      for (var m = 0; m < R.months; m++) {
+        var src = cellOf(rows, key, m);
+        var v = plainValue(cellRawValue(src));
+        if (v === null || v === undefined || v === '') continue;    // 上面空白，下面也留空白
+        setFormula(cellOf(rows2, key, m), addr(rows, key, m), typeof v === 'number' ? v : NaN, src.numFmt || 'General');
+      }
+      var note = ws.getCell(rows[key], R.noteCol).value;
+      if (note) setNote(rows2, key, note);
+    });
+    fillComputed(rows2, yoLimit);
 
     wb.calcProperties = Object.assign({}, wb.calcProperties, { fullCalcOnLoad: true });
-    return { worksheet: ws, rows: rows, monthCol: R.monthCol, months: R.months };
+    return { worksheet: ws, rows: rows, rows2: rows2, monthCol: R.monthCol, months: R.months, yoLimit: yoLimit };
   }
 
   function sameSheetName(a, b) { return String(a).toLowerCase() === String(b).toLowerCase(); }
@@ -2323,7 +2346,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 21,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 22,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,
@@ -2368,6 +2391,8 @@
     addReportSheet: addReportSheet,
     REPORT_LINKS: REPORT_LINKS,
     REPORT_OFFLINE: REPORT_OFFLINE,
+    YO_LIMIT_DEFAULT: YO_LIMIT_DEFAULT,
+    REPORT_SECOND_OFFSET: REPORT_SECOND_OFFSET,
     findReportLinks: findReportLinks,
     toNumber: toNumber,
     toBlob: toBlob

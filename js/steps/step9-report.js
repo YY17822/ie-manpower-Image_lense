@@ -42,6 +42,10 @@
  *     人力需求差異(現有-需求)   =D22-D18
  *     Loading Rate%(含加班)     =D22/D18（顯示成 %）
  *
+ *   第二張表（第 24 列下面空三列，第 28 到 50 列）：和第一張一樣，紅色格子寫「YO加班上限78hr/人」，
+ *   假日工作天數改成 =(78-D34*2)/8。78 可以在畫面上改（會記住），紅色格子和公式一起變。
+ *   其他輸入和抓來的數值都參照第一張表（例如 D34 =D8），需求人力、差異、Loading Rate 用第二張表自己的數字算。
+ *
  *   來源有兩種：
  *     a. 剛才第 8 步做好的結果（不用先匯出，直接沿用）
  *     b. 上傳之前第 8 步匯出的檔案
@@ -95,7 +99,8 @@
     var out = {
       weekdays: blank6(''),
       otHours: s.otHours === undefined ? '' : String(s.otHours),
-      otRate: s.otRate === undefined ? '' : String(s.otRate)
+      otRate: s.otRate === undefined ? '' : String(s.otRate),
+      yoLimit: s.yoLimit === undefined || s.yoLimit === '' ? String(XIO.YO_LIMIT_DEFAULT) : String(s.yoLimit)
     };
     OFFLINE.forEach(function (g) {
       var saved = Array.isArray(s[g.key]) ? s[g.key] : [];
@@ -110,7 +115,7 @@
   }
   function saveInputs() {
     var i = S.inputs;
-    var keep = { otHours: i.otHours, otRate: i.otRate, offDirect: i.offDirect, offIndirect: i.offIndirect };
+    var keep = { otHours: i.otHours, otRate: i.otRate, offDirect: i.offDirect, offIndirect: i.offIndirect, yoLimit: i.yoLimit };
     REMEMBERED.forEach(function (row) { keep[row.key] = i[row.key]; });
     try { localStorage.setItem(STORE_KEY, JSON.stringify(keep)); } catch (e) { /* 存不了就算了 */ }
   }
@@ -136,6 +141,8 @@
       });
       out.otHours = num(i.otHours, '每日加班小時');
       out.otRate = num(i.otRate, '加班出勤人數 %', true);
+      out.yoLimit = num(i.yoLimit, 'YO 加班上限');
+      if (out.yoLimit === null) throw new Error('請輸入 YO 加班上限（小時）。');
       OFFLINE.forEach(function (g) {
         out[g.key] = XIO.REPORT_OFFLINE[g.key].map(function (c, k) { return num(i[g.key][k], g.label + '的' + c + '人數'); });
       });
@@ -349,6 +356,12 @@
       (function () { var el = input(inp.otRate, '加班出勤人數 %', function (v) { inp.otRate = v; }, 'in-tiny'); el.id = 'f9-ot-rate'; return el; })(),
       h('span', { text: '%' })));
 
+    // 第二張表：YO 加班上限
+    els.entry.appendChild(h('div', { class: 'field-row entry-ot' },
+      h('label', { for: 'f9-yo-limit', text: 'YO 加班上限（第二張表）：' }),
+      (function () { var el = input(inp.yoLimit, 'YO 加班上限幾小時', function (v) { inp.yoLimit = v; }, 'in-tiny'); el.id = 'f9-yo-limit'; return el; })(),
+      h('span', { text: '小時/人（預設 ' + XIO.YO_LIMIT_DEFAULT + '）' })));
+
     // 需求人力 Off line：各種人員的人數（每個月一樣）
     OFFLINE.forEach(function (g) {
       var row = h('div', { class: 'field-row entry-ot' }, h('span', { class: 'field-label', text: g.label + '：' }));
@@ -460,12 +473,12 @@
     var read = readInputs();
     if (read.error) { setSummary(read.error, true); return; }
     // 每次都照目前的輸入重新產生總表（給預覽用）
-    work.report = XIO.addReportSheet(work.wb, { monthRefs: work.refs || [], links: linkRefs(work.links), inputs: read.values });
+    work.report = XIO.addReportSheet(work.wb, { monthRefs: work.refs || [], links: linkRefs(work.links), inputs: read.values, yoLimit: read.values.yoLimit });
     var ws = work.report.worksheet;
     var names = work.wb.worksheets.map(function (w) { return w.name; });
     var replacing = src.kind === 'file' && S.upload.sheets.some(function (n) { return sameName(n, SHEET_NAME); });
     var text = '匯出的檔案有 ' + names.length + ' 個工作表：' + names.join('、') + '。「' + SHEET_NAME +
-      '」第 4 到 24 列都已經填好。';
+      '」有兩張表：上面是法定加班上限 46hr，下面（第 28 列起）是 YO 加班上限 ' + read.values.yoLimit + 'hr。';
     if (replacing) text += ' 檔案裡原本的「' + SHEET_NAME + '」工作表會重新建立。';
     setSummary(text, false, replacing);
 
@@ -484,9 +497,9 @@
 
     ui.renderSheet(els.preview, ws, {
       headerEnd: XIO.REPORT.headRow,
-      lastRow: XIO.REPORT.lastRow,
+      lastRow: XIO.REPORT.lastRow + XIO.REPORT_SECOND_OFFSET,
       colCount: XIO.REPORT.noteCol,
-      rows: XIO.REPORT.lastRow,
+      rows: XIO.REPORT.lastRow + XIO.REPORT_SECOND_OFFSET,
       caption: '總表的版面（顏色、框線在 Excel 裡才看得到）。'
     });
 
@@ -589,7 +602,7 @@
   /* ---------- 產生活頁簿 ---------- */
   function buildWorkbook(src, refs, links, inputs) {
     return buildFrom(src).then(function (wb) {
-      XIO.addReportSheet(wb, { monthRefs: refs, links: links, inputs: inputs });
+      XIO.addReportSheet(wb, { monthRefs: refs, links: links, inputs: inputs, yoLimit: inputs.yoLimit });
       return wb;
     });
   }
