@@ -1,6 +1,6 @@
 {
-  "name": "IE 人力需求小程式",
-  "short_name": "IE 人力需求",
+  "name": "IE 人力需求程式（3F 取像）",
+  "short_name": "IE人力 3F取像",
   "description": "IE 部門每月計算未來六個月人力需求的小工具",
   "lang": "zh-Hant",
   "start_url": "./index.html",
