@@ -558,6 +558,14 @@
    * 表頭列的樣式、合併儲存格、行寬、列高都會照原樣帶到新檔；
    * 合併儲存格如果只保留了其中幾行，會縮成只合併那幾行。
    */
+  // 第 1 步篩選時把儲存格的填滿色彩拿掉（變透明）：原報表有些列塗了底色，
+  // 留著的話會蓋過後面步驟標的前三大淺橘色，匯出的檔案也會一直帶著那些顏色。
+  function withoutFill(style) {
+    var out = Object.assign({}, style || {});
+    delete out.fill;
+    return out;
+  }
+
   function filter(ws, opts) {
     var ExcelJS = global.ExcelJS;
     var dataStartRow = opts.dataStartRow;
@@ -597,7 +605,7 @@
         src = srcRow.findCell(keepCols[i]);
         if (!src) continue;
         dst = dstRow.getCell(i + 1);
-        dst.style = src.style;
+        dst.style = withoutFill(src.style);
         if (!src.isMerged || src.master === src) dst.value = exportValue(src);
       }
     }
@@ -613,7 +621,7 @@
       var master = ws.getCell(m.top, m.left);
       var target = ows.getCell(m.top, n1);
       target.value = exportValue(master);
-      if (kept[0] !== m.left) target.style = master.style;
+      if (kept[0] !== m.left) target.style = withoutFill(master.style);
       if (n2 > n1 || bottom > m.top) {
         ows.mergeCellsWithoutStyle(m.top, n1, bottom, n2);
       }
@@ -636,7 +644,7 @@
       if (titleCell && !titleKept) {
         var a1 = ows.getCell(1, 1);
         a1.value = exportValue(titleCell);
-        a1.style = titleCell.style;
+        a1.style = withoutFill(titleCell.style);
       }
     }
 
@@ -657,7 +665,7 @@
         src = srcRow.findCell(keepCols[i]);
         if (!src) continue;
         dst = dstRow.getCell(i + 1);
-        dst.style = src.style;
+        dst.style = withoutFill(src.style);
         var val = exportValue(src);
         if (val !== null) dst.value = val;
       }
@@ -2315,7 +2323,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 20,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 21,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,
