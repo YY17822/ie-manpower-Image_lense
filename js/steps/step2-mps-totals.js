@@ -32,8 +32,8 @@
   var ui = IEApp.ui;
   var h = IEApp.h;
 
-  var STORE_KEY = IEApp.storeKey('totals');
-  var STEP1_KEY = IEApp.storeKey('step1');
+  var STORE_KEY = 'totals';
+  var STEP1_KEY = 'step1';
   var REF_SHEET = 'P003';
   var LABELS = { total: 'Total', top: 'Top 3', rest: 'Non-Top 3' };
   var SUFFIX = '_匯總';
@@ -54,7 +54,7 @@
 
   function loadSettings() {
     var s = {};
-    try { s = JSON.parse(localStorage.getItem(STORE_KEY) || '{}') || {}; } catch (e) { s = {}; }
+    try { s = IEApp.settings.read(STORE_KEY) || {}; } catch (e) { s = {}; }
     var shared = ui.columns.get();          // WIP、月份的行和第 5 步共用
     settings = {
       startRow: s.startRow === undefined ? '' : s.startRow,
@@ -63,7 +63,7 @@
     };
   }
   function saveSettings() {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify({ startRow: settings.startRow })); } catch (e) { /* 存不了就算了 */ }
+    try { IEApp.settings.write(STORE_KEY, { startRow: settings.startRow }); } catch (e) { /* 存不了就算了 */ }
     ui.columns.set({ wipCol: settings.wipCol, monthCols: settings.monthCols });
   }
 
@@ -97,7 +97,7 @@
     var n = parseInt(XIO.normalizeText(settings.startRow), 10);
     if (n >= 1) return n;
     try {
-      var s1 = JSON.parse(localStorage.getItem(STEP1_KEY) || '{}') || {};
+      var s1 = IEApp.settings.read(STEP1_KEY) || {};
       n = parseInt(XIO.normalizeText(s1.startRow === undefined ? '' : s1.startRow), 10);
     } catch (e) { n = 0; }
     return n >= 1 ? n : 5;

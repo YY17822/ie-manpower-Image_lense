@@ -27,8 +27,8 @@
   var ui = IEApp.ui;
   var h = IEApp.h;
 
-  var STORE_KEY = IEApp.storeKey('step6');       // 鍵名是舊的步驟編號，改掉會讓記住的設定不見，所以沿用
-  var STEP1_KEY = IEApp.storeKey('step1');
+  var STORE_KEY = 'step6';       // 鍵名是舊的步驟編號，改掉會讓記住的設定不見，所以沿用
+  var STEP1_KEY = 'step1';
   var REF_SHEET = 'P003';
   var TITLE = '需求工時';
   var SUMMARY_MARK = '總需求工時';       // 匯總第一列的標籤裡一定有這幾個字
@@ -48,7 +48,7 @@
 
   function loadSettings() {
     var s = {};
-    try { s = JSON.parse(localStorage.getItem(STORE_KEY) || '{}') || {}; } catch (e) { s = {}; }
+    try { s = IEApp.settings.read(STORE_KEY) || {}; } catch (e) { s = {}; }
     return {
       startRow: s.startRow === undefined ? '' : s.startRow,
       items: Array.isArray(s.items) ? s.items : []      // 只記名稱和 CT.
@@ -57,7 +57,7 @@
   function saveSettings() {
     settings.items = (S.items || []).map(function (it) { return { name: it.name, ct: it.ct }; })
       .filter(function (it) { return XIO.normalizeText(it.name) !== '' || XIO.normalizeText(it.ct) !== ''; });
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(settings)); } catch (e) { /* 存不了就算了 */ }
+    try { IEApp.settings.write(STORE_KEY, settings); } catch (e) { /* 存不了就算了 */ }
   }
 
   function blankItem(months) {
@@ -111,7 +111,7 @@
     var n = parseInt(XIO.normalizeText(settings.startRow), 10);
     if (n >= 1) return n;
     try {
-      var s1 = JSON.parse(localStorage.getItem(STEP1_KEY) || '{}') || {};
+      var s1 = IEApp.settings.read(STEP1_KEY) || {};
       n = parseInt(XIO.normalizeText(s1.startRow === undefined ? '' : s1.startRow), 10);
     } catch (e) { n = 0; }
     return n >= 1 ? n : 5;

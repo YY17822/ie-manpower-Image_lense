@@ -289,7 +289,8 @@ ExcelJS 4.x 只看到標籤就當成「有」，結果匯出後整張表被畫�
 
 ```
 index.html                  主畫面
-js/config.js                專案代號（快取和記住的設定都用它當開頭）
+js/config.js                專案代號、Supabase 網址和 publishable key
+js/cloud.js                 登入與共用設定（Supabase）
 manifest.webmanifest        安裝成 App 用的資訊
 sw.js                       離線快取
 css/style.css               樣式
@@ -320,6 +321,42 @@ icons/                      圖示
 
 每一步做完會把結果放在 `IEApp.state`（第 1 步是 `mpsFiltered`，第 2 步是 `mpsTotals`，第 3 步是 `withP003`，第 4 步是 `withCT`，第 5 步是 `withDemand`，第 6 步是 `withSummary`，第 7 步是 `withRma`，第 8 步是 `withManpower`，第 9 步是 `withReport`，第 10 步是 `withRmaManpower`），
 裡面的 `build()` 會產生一份新的活頁簿，下一步拿來接著加工。
+
+## 登入與共用設定（Supabase）
+
+部門的人共用同一份「記住的設定」：誰最後存，大家打開看到的就是誰的。
+
+- 打開時要先登入（email + 密碼）。帳號由管理者在 Supabase 後台建立（Authentication → Users → Add user），不開放自行註冊。
+- 設定存在 Supabase 專案的 `ie_manpower.settings` 表：一筆是 `(app, key) → value`，`app` 是專案代號（`js/config.js` 的 `PROJECT_ID`），`key` 是設定名稱（`step1`、`report`…），`value` 是 JSON。8 個人力需求 PWA 共用這張表，用 `app` 分開，各自的欄位內容可以不同。
+- 誰改的、什麼時候改的由資料庫自動記錄（`updated_by`、`updated_at`），各步驟標題下面會顯示「共用設定：上次由 某某 於 10/19 16:05 修改」。
+- 右上角顯示登入的人、同步狀態（已同步／同步中／離線）和「登出」。
+- 讀設定一律讀這台電腦的本機備份（localStorage），所以離線也能用；改了設定先存本機，再在背景上傳（停止輸入 1 秒後）。離線時改的會等連上網路自動上傳。
+- 打開時先把 Supabase 上最新的設定抓下來蓋掉本機備份，才載入各步驟（所以 `index.html` 裡沒有各步驟的 `<script>`，改由 `js/app.js` 的 `STEP_FILES` 載入）。
+- 第一次登入時，這台電腦原本有、但 Supabase 上還沒有的設定會傳上去。
+- 不記住的欄位（平日工作天數、RMA 數量、Cut-off 日期）照舊每次輸入，不會上傳。
+- 程式在 `js/cloud.js`，直接用 fetch 呼叫 Supabase 的 REST API（沒有用 supabase-js 套件）。各步驟用 `IEApp.settings.read(名稱)`／`IEApp.settings.write(名稱, 物件)` 讀寫設定。
+- Supabase 的網址和 publishable key 在 `js/config.js`。publishable key 本來就是公開用的；安全靠登入和資料表的權限規則（只有登入的人能讀寫，不能刪除）。`secret`／`service_role` key 不可以放進程式。
+
+建立資料庫的 SQL（已經在 Supabase 的 SQL Editor 執行過；Data API 的 Exposed schemas 要加上 `ie_manpower`）：
+
+```sql
+create schema if not exists ie_manpower;
+grant usage on schema ie_manpower to authenticated;
+create table if not exists ie_manpower.settings (
+  app text not null, key text not null, value jsonb not null,
+  updated_at timestamptz not null default now(), updated_by text,
+  primary key (app, key)
+);
+alter table ie_manpower.settings enable row level security;
+grant select, insert, update on ie_manpower.settings to authenticated;
+create policy "settings_read"   on ie_manpower.settings for select to authenticated using (true);
+create policy "settings_insert" on ie_manpower.settings for insert to authenticated with check (true);
+create policy "settings_update" on ie_manpower.settings for update to authenticated using (true) with check (true);
+create or replace function ie_manpower.stamp_settings() returns trigger language plpgsql security definer set search_path = '' as $$
+begin new.updated_at := now(); new.updated_by := auth.jwt() ->> 'email'; return new; end $$;
+create trigger settings_stamp before insert or update on ie_manpower.settings
+for each row execute function ie_manpower.stamp_settings();
+```
 
 ## 專案代號與複製成新專案
 

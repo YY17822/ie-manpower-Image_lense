@@ -61,11 +61,11 @@
   var h = IEApp.h;
 
   var SHEET_NAME = XIO.REPORT_SHEET;
-  var STEP1_KEY = IEApp.storeKey('step1');
+  var STEP1_KEY = 'step1';
   var TITLE = '需求工時';
   var SUFFIX = '_總表';
   var EXTRA = ['P003', '人力', SHEET_NAME];
-  var STORE_KEY = IEApp.storeKey('report');
+  var STORE_KEY = 'report';
   var MONTHS = XIO.REPORT.months;
   var DEFAULT_WORK_MINUTES = '480';
   // 需求人力 Off line 的兩組人數（人員種類在 excel-io.js 的 REPORT_OFFLINE）
@@ -95,7 +95,7 @@
 
   function loadInputs() {
     var s = {};
-    try { s = JSON.parse(localStorage.getItem(STORE_KEY) || '{}') || {}; } catch (e) { s = {}; }
+    try { s = IEApp.settings.read(STORE_KEY) || {}; } catch (e) { s = {}; }
     var out = {
       weekdays: blank6(''),
       otHours: s.otHours === undefined ? '' : String(s.otHours),
@@ -117,7 +117,7 @@
     var i = S.inputs;
     var keep = { otHours: i.otHours, otRate: i.otRate, offDirect: i.offDirect, offIndirect: i.offIndirect, yoLimit: i.yoLimit };
     REMEMBERED.forEach(function (row) { keep[row.key] = i[row.key]; });
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(keep)); } catch (e) { /* 存不了就算了 */ }
+    try { IEApp.settings.write(STORE_KEY, keep); } catch (e) { /* 存不了就算了 */ }
   }
 
   // 輸入框的文字 → 數字。回傳 { values, error, blanks: [說明…] }
@@ -193,7 +193,7 @@
     if (src.kind === 'prev' && src.prev.dataStartRow) return src.prev.dataStartRow;
     var n = 0;
     try {
-      var s1 = JSON.parse(localStorage.getItem(STEP1_KEY) || '{}') || {};
+      var s1 = IEApp.settings.read(STEP1_KEY) || {};
       n = parseInt(XIO.normalizeText(s1.startRow === undefined ? '' : s1.startRow), 10);
     } catch (e) { n = 0; }
     return n >= 1 ? n : 5;
@@ -218,7 +218,7 @@
 
   // 現有人力：從「人力」工作表抓第 8 步確認過的那幾列
   var MP_SHEET = '人力';
-  var MP_STORE_KEY = IEApp.storeKey('manpower');
+  var MP_STORE_KEY = 'manpower';
   var MP_LINKS = [
     { key: 'haveOnline', item: 'online', label: 'Online' },
     { key: 'haveOffDirect', item: 'offDirect', label: 'Off line（直接）' },
@@ -231,7 +231,7 @@
       return { rows: src.prev.rows, firstCol: src.prev.firstMonthCol, from: 'chain' };
     }
     var s = {};
-    try { s = JSON.parse(localStorage.getItem(MP_STORE_KEY) || '{}') || {}; } catch (e) { s = {}; }
+    try { s = IEApp.settings.read(MP_STORE_KEY) || {}; } catch (e) { s = {}; }
     var firstCol = parseInt(s.lastFirstCol, 10) || 0;
     if (!s.rows || !firstCol) return null;
     return { rows: s.rows, firstCol: firstCol, from: 'saved' };

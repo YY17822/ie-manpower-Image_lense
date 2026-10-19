@@ -39,7 +39,7 @@
   var SHEET_NAME = XIO.RMA_SHEET;
   var REPORT_SHEET = XIO.REPORT_SHEET;
   var SUFFIX = '_RMA人力';
-  var STORE_KEY = IEApp.storeKey('rma-manpower');
+  var STORE_KEY = 'rma-manpower';
 
   var S = {
     upload: null,         // 上傳的第 9 步檔案 { name, buffer, sheets }
@@ -56,10 +56,10 @@
     return d.getFullYear() + '/' + (d.getMonth() + 1) + '/' + d.getDate();
   }
   function loadVersion() {
-    try { return (JSON.parse(localStorage.getItem(STORE_KEY) || '{}') || {}).version || 'A'; } catch (e) { return 'A'; }
+    try { return (IEApp.settings.read(STORE_KEY) || {}).version || 'A'; } catch (e) { return 'A'; }
   }
   function saveVersion() {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify({ version: S.version })); } catch (e) { /* 存不了就算了 */ }
+    try { IEApp.settings.write(STORE_KEY, { version: S.version }); } catch (e) { /* 存不了就算了 */ }
   }
   function cutoffText() {
     return 'Cut-off: ' + S.cutDate.trim() + 'Ver:' + S.version.trim();
