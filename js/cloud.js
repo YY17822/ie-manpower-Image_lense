@@ -4,10 +4,14 @@
  * 部門的人共用同一份「記住的設定」：誰最後存，大家打開看到的就是誰的。
  *   資料庫  Supabase 專案（js/config.js 的 SUPABASE_URL / SUPABASE_KEY）
  *   位置    schema ie_manpower 的 settings 表，一筆 = (app, key) → value(jsonb)
- *           app 是這個 PWA 的專案代號（PROJECT_ID），key 是設定名稱（例如 step1、report）
+ *           app 是這個 PWA 的專案代號（PROJECT_ID）
+ *           key 是「步驟.輸入項目」，例如 step9.otHours（第 9 步的每日加班小時）
+ *           一個輸入項目一筆；6 個月這種一起看的值放在同一筆（value 是陣列）
+ *           這樣兩個人同時改同一步的不同項目，也不會互相蓋掉
  *   登入    Supabase Auth 的 email + 密碼（帳號由管理者在 Supabase 後台建立，不開放註冊）
  *
- * 各步驟用 IEApp.settings.read(name) / write(name, obj) 讀寫設定：
+ * 各步驟用 IEApp.settings.read(步驟) / write(步驟, 物件) 讀寫一整步的設定（例如 'step9'），
+ * 這裡負責拆成一個個輸入項目上傳、下載時再組回去：
  *   讀    一律讀這台電腦的本機備份（localStorage），所以是同步的、離線也能用
  *   寫    先存本機，再在背景上傳 Supabase（連續打字時等停下來 1 秒才傳）
  *   開啟  登入後先把 Supabase 上最新的設定抓下來蓋掉本機備份，才載入各步驟
@@ -28,9 +32,19 @@
   var ENABLED = !!(URL_BASE && KEY);
 
   var SESSION_KEY = IEApp.storeKey('_session');   // 登入資訊（只存這台電腦）
-  var SYNC_KEY = IEApp.storeKey('_sync');         // { dirty: { 名稱: true }, meta: { 名稱: { by, at } } }
+  var SYNC_KEY = IEApp.storeKey('_sync');         // { dirty: { 'step9.otHours': true }, meta: { 'step9.otHours': { by, at } } }
   var PUSH_DELAY = 1000;
   var TIMEOUT = 10000;
+
+  // 舊的設定組名稱 → 現在的（組名統一用步驟編號）。本機備份和雲端的舊資料都照這張表搬
+  var LEGACY_GROUPS = {
+    totals: 'step2', columns: 'step2-5', step3: 'step4', step4: 'step5', step5: 'step6', step6: 'step7',
+    manpower: 'step8', report: 'step9', 'rma-manpower': 'step10'
+  };
+  // 新格式裡改過名的組（版本 28 用過 shared，版本 29 起改成寫明是哪兩步共用）
+  var RENAMED_GROUPS = { shared: 'step2-5' };
+  var LAYOUT_KEY = IEApp.storeKey('_layout');      // 本機備份的格式版本
+  var LAYOUT = 3;                                  // 2 = 組名用步驟編號、一個輸入項目一筆；3 = shared 改名 step2-5
 
   var session = null;          // { access_token, refresh_token, expires_at(ms), email }
   var refreshing = null;
@@ -57,8 +71,8 @@
   }
   function saveSyncState(s) { writeLocal(SYNC_KEY, JSON.stringify(s)); }
 
-  // 這台電腦上這個專案的設定名稱（不含 _ 開頭的內部資料）
-  function localNames() {
+  // 這台電腦上這個專案的設定組（step1、step9…，不含 _ 開頭的內部資料）
+  function localGroups() {
     var prefix = IEApp.storeKey('');
     var out = [];
     try {
@@ -69,29 +83,48 @@
     } catch (e) { /* 不能用 localStorage */ }
     return out;
   }
+  function readGroup(group) {
+    var v = readJson(IEApp.storeKey(group), null);
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+  }
+  function itemKey(group, field) { return group + '.' + field; }
+  function splitKey(key) {
+    var i = String(key).indexOf('.');
+    return i < 0 ? null : { group: key.slice(0, i), field: key.slice(i + 1) };
+  }
+  function same(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+  function inGroups(key, groups) {
+    var k = splitKey(key);
+    return !!k && groups.indexOf(k.group) >= 0;
+  }
 
   /* ---------- 各步驟用的設定 API ---------- */
   var settings = {
-    // 回傳之前存的物件；沒有就回傳 null
-    read: function (name) { return readJson(IEApp.storeKey(name), null); },
-    // 存下設定：本機馬上存好，Supabase 稍後在背景上傳
-    write: function (name, value) {
-      var text = JSON.stringify(value);
-      if (readLocal(IEApp.storeKey(name)) === text) return;   // 內容沒變（例如打開畫面時重存一次）就不算修改
-      writeLocal(IEApp.storeKey(name), text);
-      if (!ENABLED) return;
+    // 回傳這一步之前存的物件；沒有就回傳 null
+    read: function (group) { return readJson(IEApp.storeKey(group), null); },
+    // 存下這一步的設定：本機馬上存好；有改到的輸入項目稍後在背景上傳
+    write: function (group, value) {
+      var before = readGroup(group);
+      if (same(before, value)) return;                 // 內容沒變（例如打開畫面時重存一次）就不算修改
+      writeLocal(IEApp.storeKey(group), JSON.stringify(value));
+      if (!ENABLED || !value || typeof value !== 'object') return;
       var s = syncState();
-      s.dirty[name] = true;
+      var changed = false;
+      Object.keys(value).forEach(function (field) {
+        if (!same(before[field], value[field])) { s.dirty[itemKey(group, field)] = true; changed = true; }
+      });
+      if (!changed) return;
       saveSyncState(s);
+      updateNotes();
       schedulePush();
     },
-    // 這幾個設定最後是誰、什麼時候改的（取最新的一筆）；沒有回傳 null
-    lastChange: function (names) {
+    // 這幾步的設定最後是誰、什麼時候改的（取最新的一個輸入項目）；沒有回傳 null
+    lastChange: function (groups) {
       var meta = syncState().meta;
       var best = null;
-      (names || []).forEach(function (n) {
-        var m = meta[n];
-        if (m && m.at && (!best || m.at > best.at)) best = m;
+      Object.keys(meta).forEach(function (key) {
+        var m = meta[key];
+        if (inGroups(key, groups || []) && m && m.at && (!best || m.at > best.at)) best = m;
       });
       return best;
     }
@@ -190,21 +223,54 @@
   }
 
   /* ---------- 同步 ---------- */
-  // 把 Supabase 上這個 PWA 的設定抓下來：沒有「還沒上傳」的就用雲端的蓋掉本機；
-  // 本機有、雲端沒有的設定，標成要上傳（第一次使用時把這台電腦原本的設定傳上去）。
+  // 把 Supabase 上這個 PWA 的設定抓下來：每個輸入項目，本機沒有「還沒上傳」的修改就用雲端的；
+  // 本機有、雲端沒有的輸入項目，標成要上傳（第一次使用時把這台電腦原本的設定傳上去）。
   function pull() {
     setStatus('busy', '同步中…');
     return api('/rest/v1/settings?app=eq.' + encodeURIComponent(APP) + '&select=key,value,updated_at,updated_by',
       { headers: { 'Accept-Profile': SCHEMA } })
       .then(function (rows) {
         var s = syncState();
+        var groups = {};                               // 要寫回本機的設定組
         var remote = {};
-        (rows || []).forEach(function (row) {
-          remote[row.key] = true;
-          if (!s.dirty[row.key]) writeLocal(IEApp.storeKey(row.key), JSON.stringify(row.value));
-          s.meta[row.key] = { by: row.updated_by || '', at: row.updated_at || '' };
+        function group(g) { if (!groups[g]) groups[g] = readGroup(g); return groups[g]; }
+        // 舊格式（一步一筆，key 沒有「.」）：轉成一個項目一筆，並標成要用新格式上傳；雲端已有新格式的項目以新格式為準
+        var legacy = (rows || []).filter(function (r) { return !splitKey(r.key); });
+        var renamed = (rows || []).filter(function (r) { var k = splitKey(r.key); return k && RENAMED_GROUPS[k.group]; });
+        var current = (rows || []).filter(function (r) { var k = splitKey(r.key); return k && !RENAMED_GROUPS[k.group]; });
+        current.forEach(function (r) { remote[r.key] = true; });
+        // 改過名的組（例如 shared.wipCol → step2-5.wipCol）：雲端還沒有新名稱的項目才用舊的，並用新名稱上傳
+        renamed.forEach(function (r) {
+          var k = splitKey(r.key);
+          var g = RENAMED_GROUPS[k.group];
+          var key = itemKey(g, k.field);
+          if (remote[key] || s.dirty[key]) return;
+          group(g)[k.field] = r.value;
+          s.dirty[key] = true;
         });
-        localNames().forEach(function (name) { if (!remote[name]) s.dirty[name] = true; });
+        legacy.forEach(function (r) {
+          var g = LEGACY_GROUPS[r.key] || r.key;
+          var v = r.value && typeof r.value === 'object' && !Array.isArray(r.value) ? r.value : {};
+          Object.keys(v).forEach(function (field) {
+            var key = itemKey(g, field);
+            if (remote[key] || s.dirty[key]) return;
+            group(g)[field] = v[field];
+            s.dirty[key] = true;
+          });
+        });
+        current.forEach(function (r) {
+          var k = splitKey(r.key);
+          if (!s.dirty[r.key]) group(k.group)[k.field] = r.value;
+          s.meta[r.key] = { by: r.updated_by || '', at: r.updated_at || '' };
+        });
+        Object.keys(groups).forEach(function (g) { writeLocal(IEApp.storeKey(g), JSON.stringify(groups[g])); });
+        localGroups().forEach(function (g) {
+          var v = readGroup(g);
+          Object.keys(v).forEach(function (field) {
+            var key = itemKey(g, field);
+            if (!remote[key] && v[field] !== null && v[field] !== undefined) s.dirty[key] = true;
+          });
+        });
         saveSyncState(s);
         updateNotes();
         return push();
@@ -225,12 +291,20 @@
     if (!names.length) { setStatus('ok', '已同步'); return Promise.resolve(); }
     if (!session) return Promise.resolve();
     var rows = [];
+    var skipped = [];
     names.forEach(function (name) {
-      var raw = readLocal(IEApp.storeKey(name));
-      var value;
-      try { value = JSON.parse(raw); } catch (e) { value = null; }
-      if (value !== null && value !== undefined) rows.push({ app: APP, key: name, value: value });
+      var k = splitKey(name);
+      var value = k ? readGroup(k.group)[k.field] : undefined;
+      if (value === null || value === undefined) skipped.push(name);      // 已經沒有這個項目了，不用傳
+      else rows.push({ app: APP, key: name, value: value });
     });
+    if (!rows.length) {
+      var st0 = syncState();
+      skipped.forEach(function (n) { delete st0.dirty[n]; });
+      saveSyncState(st0);
+      setStatus('ok', '已同步');
+      return Promise.resolve();
+    }
     setStatus('busy', '同步中…');
     pushing = api('/rest/v1/settings?on_conflict=app,key', {
       method: 'POST',
@@ -238,11 +312,11 @@
       headers: { 'Content-Profile': SCHEMA, Prefer: 'resolution=merge-duplicates,return=representation' }
     }).then(function (saved) {
       var st = syncState();
-      names.forEach(function (name) {
+      skipped.forEach(function (n) { delete st.dirty[n]; });
+      rows.forEach(function (sent) {
         // 上傳的這段時間又改了的，留著下一輪再傳
-        var now = readLocal(IEApp.storeKey(name));
-        var sent = rows.filter(function (r) { return r.key === name; })[0];
-        if (!sent || JSON.stringify(sent.value) === now) delete st.dirty[name];
+        var k = splitKey(sent.key);
+        if (same(sent.value, readGroup(k.group)[k.field])) delete st.dirty[sent.key];
       });
       (saved || []).forEach(function (row) { st.meta[row.key] = { by: row.updated_by || '', at: row.updated_at || '' }; });
       saveSyncState(st);
@@ -312,7 +386,7 @@
     var names = (el.getAttribute('data-keys') || '').split(',').filter(Boolean);
     var m = settings.lastChange(names);
     var dirty = syncState().dirty;
-    var waiting = names.some(function (n) { return dirty[n]; });
+    var waiting = Object.keys(dirty).some(function (key) { return inGroups(key, names); });
     var text = m ? '共用設定：上次由 ' + shortName(m.by) + ' 於 ' + formatTime(m.at) + ' 修改'
       : '共用設定：還沒有人存過';
     if (waiting) text += '（這台電腦有修改還沒上傳）';
@@ -397,6 +471,35 @@
       global.addEventListener('online', function () { if (session) pull(); });
     });
   }
+
+  // 本機備份從舊組名搬到新組名（只做一次；要先全部讀出來再寫，因為 step3→step4、step4→step5 會接在一起）
+  (function migrateLayout() {
+    var layout = readJson(LAYOUT_KEY, 0);
+    if (layout >= LAYOUT) return;
+    if (layout === 2) {                            // 版本 28 → 29：只有 shared 改名
+      Object.keys(RENAMED_GROUPS).forEach(function (name) {
+        var raw = readLocal(IEApp.storeKey(name));
+        var to = IEApp.storeKey(RENAMED_GROUPS[name]);
+        if (raw !== null && readLocal(to) === null) writeLocal(to, raw);
+        writeLocal(IEApp.storeKey(name), null);
+      });
+      writeLocal(SYNC_KEY, null);
+      writeLocal(LAYOUT_KEY, String(LAYOUT));
+      return;
+    }
+    var old = {};
+    Object.keys(LEGACY_GROUPS).forEach(function (name) {
+      var raw = readLocal(IEApp.storeKey(name));
+      if (raw !== null) old[name] = raw;
+    });
+    Object.keys(old).forEach(function (name) { writeLocal(IEApp.storeKey(name), null); });
+    Object.keys(old).forEach(function (name) {
+      var to = IEApp.storeKey(LEGACY_GROUPS[name]);
+      if (readLocal(to) === null) writeLocal(to, old[name]);
+    });
+    writeLocal(SYNC_KEY, null);                    // 舊格式的同步紀錄不再適用，下次同步重新整理
+    writeLocal(LAYOUT_KEY, String(LAYOUT));
+  })();
 
   IEApp.settings = settings;
   IEApp.cloud = {

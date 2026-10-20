@@ -65,14 +65,14 @@
   // 各步驟用到的共用設定（畫面上「上次由誰修改」看這幾個）
   var STEP_SETTINGS = {
     'mps-filter': ['step1'],
-    'mps-totals': ['totals', 'columns'],
-    'ct-lookup': ['step3'],
-    'demand-hours': ['step4', 'columns'],
-    'summary': ['step5'],
-    'rma': ['step6'],
-    'manpower': ['manpower'],
-    'report': ['report'],
-    'rma-manpower': ['rma-manpower']
+    'mps-totals': ['step2', 'step2-5'],
+    'ct-lookup': ['step4'],
+    'demand-hours': ['step5', 'step2-5'],
+    'summary': ['step6'],
+    'rma': ['step7'],
+    'manpower': ['step8'],
+    'report': ['step9'],
+    'rma-manpower': ['step10']
   };
 
   var registry = {};

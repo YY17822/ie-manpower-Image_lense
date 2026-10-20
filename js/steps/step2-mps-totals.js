@@ -32,7 +32,7 @@
   var ui = IEApp.ui;
   var h = IEApp.h;
 
-  var STORE_KEY = 'totals';
+  var STORE_KEY = 'step2';
   var STEP1_KEY = 'step1';
   var REF_SHEET = 'P003';
   var LABELS = { total: 'Total', top: 'Top 3', rest: 'Non-Top 3' };

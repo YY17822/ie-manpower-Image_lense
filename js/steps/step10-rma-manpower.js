@@ -39,7 +39,7 @@
   var SHEET_NAME = XIO.RMA_SHEET;
   var REPORT_SHEET = XIO.REPORT_SHEET;
   var SUFFIX = '_RMA人力';
-  var STORE_KEY = 'rma-manpower';
+  var STORE_KEY = 'step10';
 
   var S = {
     upload: null,         // 上傳的第 9 步檔案 { name, buffer, sheets }

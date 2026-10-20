@@ -65,7 +65,7 @@
   var TITLE = '需求工時';
   var SUFFIX = '_總表';
   var EXTRA = ['P003', '人力', SHEET_NAME];
-  var STORE_KEY = 'report';
+  var STORE_KEY = 'step9';
   var MONTHS = XIO.REPORT.months;
   var DEFAULT_WORK_MINUTES = '480';
   // 需求人力 Off line 的兩組人數（人員種類在 excel-io.js 的 REPORT_OFFLINE）
@@ -218,7 +218,7 @@
 
   // 現有人力：從「人力」工作表抓第 8 步確認過的那幾列
   var MP_SHEET = '人力';
-  var MP_STORE_KEY = 'manpower';
+  var MP_STORE_KEY = 'step8';
   var MP_LINKS = [
     { key: 'haveOnline', item: 'online', label: 'Online' },
     { key: 'haveOffDirect', item: 'offDirect', label: 'Off line（直接）' },

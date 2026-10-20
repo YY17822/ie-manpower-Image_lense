@@ -327,14 +327,34 @@ icons/                      圖示
 部門的人共用同一份「記住的設定」：誰最後存，大家打開看到的就是誰的。
 
 - 打開時要先登入（email + 密碼）。帳號由管理者在 Supabase 後台建立（Authentication → Users → Add user），不開放自行註冊。
-- 設定存在 Supabase 專案的 `ie_manpower.settings` 表：一筆是 `(app, key) → value`，`app` 是專案代號（`js/config.js` 的 `PROJECT_ID`），`key` 是設定名稱（`step1`、`report`…），`value` 是 JSON。8 個人力需求 PWA 共用這張表，用 `app` 分開，各自的欄位內容可以不同。
+- 設定存在 Supabase 專案的 `ie_manpower.settings` 表：一筆是 `(app, key) → value`。
+  - `app`：專案代號（`js/config.js` 的 `PROJECT_ID`）。8 個人力需求 PWA 共用這張表，用 `app` 分開。
+  - `key`：「步驟.輸入項目」，例如 `step9.otHours` 是第 9 步的每日加班小時。組名一律用步驟編號（`step1`～`step10`），第 2、5 步共用的 WIP／月份行是 `step2-5`（同一個軟件的兩步共用，不是各產線共用）。
+  - `value`：那個輸入項目的值（JSON）。6 個月、Off line 各種人數這種一起看的值放在同一筆（陣列）。
+  - 一個輸入項目一筆，所以兩個人同時改同一步的不同項目，不會互相蓋掉；每個項目都記得是誰改的。
 - 誰改的、什麼時候改的由資料庫自動記錄（`updated_by`、`updated_at`），各步驟標題下面會顯示「共用設定：上次由 某某 於 10/19 16:05 修改」。
 - 右上角顯示登入的人、同步狀態（已同步／同步中／離線）和「登出」。
 - 讀設定一律讀這台電腦的本機備份（localStorage），所以離線也能用；改了設定先存本機，再在背景上傳（停止輸入 1 秒後）。離線時改的會等連上網路自動上傳。
 - 打開時先把 Supabase 上最新的設定抓下來蓋掉本機備份，才載入各步驟（所以 `index.html` 裡沒有各步驟的 `<script>`，改由 `js/app.js` 的 `STEP_FILES` 載入）。
 - 第一次登入時，這台電腦原本有、但 Supabase 上還沒有的設定會傳上去。
+- 舊版的組名（`totals`、`columns`、`step3`…`step6`、`manpower`、`report`、`rma-manpower`）第一次打開新版時會自動改成步驟編號；版本 27 測試時存進 Supabase 的舊格式資料（key 沒有「.」的那幾筆）也會自動轉成新格式再傳一次。舊格式那幾筆網頁不能刪，可以在 Supabase 的 Table Editor 手動刪掉。
+
+3F 取像存進資料庫的輸入項目：
+
+| key | 對應的輸入框 |
+| --- | --- |
+| `step1.values`、`step1.cols`、`step1.startRow`、`step1.selCol` | 第 1 步：A 行等於多少、保留的行、資料起始列、選取條件的行 |
+| `step2.startRow` | 第 2 步：資料起始列（報表版面不一樣時） |
+| `step2-5.wipCol`、`step2-5.monthCols` | 第 2、5 步共用：WIP 在哪行、各月在哪幾行 |
+| `step4.keyCol`、`step4.refKeyCol`、`step4.refValueCol`、`step4.refDivCol`、`step4.startRow` | 第 4 步：MPS 料號、P003 料號／Labor／Base Qty 的行、資料起始列 |
+| `step5.startRow`、`step6.startRow` | 第 5、6 步：資料起始列 |
+| `step7.items`、`step7.startRow` | 第 7 步：RMA 項目名稱和 CT.、資料起始列 |
+| `step8.rows`、`step8.lastFirstCol` | 第 8 步：六個項目在人力報表第幾列、上次的當月行 |
+| `step9.workMinutes`、`step9.effTop3`、`step9.effNonTop3`、`step9.attendance` | 第 9 步：工作時間、綜合效率（Top-3／Non-Top 3）、出勤率，各 6 個月 |
+| `step9.otHours`、`step9.otRate`、`step9.offDirect`、`step9.offIndirect`、`step9.yoLimit` | 第 9 步：每日加班小時、加班出勤人數 %、Off line 直接／間接人數、YO 加班上限 |
+| `step10.version` | 第 10 步：Cut-off 版次 |
 - 不記住的欄位（平日工作天數、RMA 數量、Cut-off 日期）照舊每次輸入，不會上傳。
-- 程式在 `js/cloud.js`，直接用 fetch 呼叫 Supabase 的 REST API（沒有用 supabase-js 套件）。各步驟用 `IEApp.settings.read(名稱)`／`IEApp.settings.write(名稱, 物件)` 讀寫設定。
+- 程式在 `js/cloud.js`，直接用 fetch 呼叫 Supabase 的 REST API（沒有用 supabase-js 套件）。各步驟用 `IEApp.settings.read('step9')`／`IEApp.settings.write('step9', 物件)` 讀寫一整步的設定，`cloud.js` 負責拆成一個個輸入項目上傳、下載時再組回去。
 - Supabase 的網址和 publishable key 在 `js/config.js`。publishable key 本來就是公開用的；安全靠登入和資料表的權限規則（只有登入的人能讀寫，不能刪除）。`secret`／`service_role` key 不可以放進程式。
 
 建立資料庫的 SQL（已經在 Supabase 的 SQL Editor 執行過；Data API 的 Exposed schemas 要加上 `ie_manpower`）：

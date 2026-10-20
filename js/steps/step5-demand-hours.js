@@ -27,7 +27,7 @@
   var ui = IEApp.ui;
   var h = IEApp.h;
 
-  var STORE_KEY = 'step4';       // 鍵名是舊的步驟編號，改掉會讓記住的設定不見，所以沿用
+  var STORE_KEY = 'step5';
   var STEP1_KEY = 'step1';
   var REF_SHEET = 'P003';
   var CT_HEADER = 'CT.';

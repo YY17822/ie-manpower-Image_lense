@@ -34,7 +34,7 @@
   var REF_SHEET = 'P003';
   var SUFFIX = '_人力';
   var MONTHS = 6;
-  var STORE_KEY = 'manpower';
+  var STORE_KEY = 'step8';
   var MIN_PREVIEW_ROWS = 15;
   var MAX_PREVIEW_ROWS = 200;
   var ITEMS = XIO.MANPOWER_ITEMS;
