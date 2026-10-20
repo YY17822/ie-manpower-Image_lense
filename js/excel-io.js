@@ -552,6 +552,7 @@
    *   dataStartRow  資料從第幾列開始（之前的列是表頭，全部保留）
    *   selectorCol   選取條件所在的行（數字，A=1）
    *   values        要選取的值（字串陣列）
+   *   exclude       true = 保留「不等於」這些值的列（選取的行空白也保留，但整列空白的不要）
    *   keepCols      要保留的行（數字陣列，已排序）
    *   lastRow       最後一列資料的列號
    *
@@ -657,7 +658,14 @@
       srcRow = ws.findRow(r);
       if (!srcRow) continue;
       var key = matchKey(cellRawValue(srcRow.findCell(opts.selectorCol)));
-      if (key === '' || !wanted[key]) continue;
+      if (opts.exclude) {
+        // 「不等於」：等於任一個值的列不要；選取的行是空白的列保留，但保留的行全都空白的列（空行）不要
+        if (key !== '' && wanted[key]) continue;
+        if (key === '' && !keepCols.some(function (c) {
+          var v = plainValue(cellRawValue(srcRow.findCell(c)));
+          return v !== null && v !== undefined && v !== '';
+        })) continue;
+      } else if (key === '' || !wanted[key]) continue;
       matched++;
       dstRow = ows.getRow(outRow++);
       if (srcRow.height) dstRow.height = srcRow.height;
@@ -2527,7 +2535,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 29,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 30,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,

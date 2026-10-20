@@ -40,6 +40,9 @@ h1, h2, p { margin: 0; }
 
 :focus-visible { outline: 3px solid var(--mark-strong); outline-offset: 2px; }
 
+/* 有 hidden 屬性的元素一律不顯示（不然 .field-row 這類設了 display 的元素會蓋掉它，例如只有一個工作表時還出現「工作表」選單） */
+[hidden] { display: none !important; }
+
 /* ---------- 外框 ---------- */
 
 .topbar {
@@ -214,6 +217,12 @@ button.step:hover { background: rgba(11, 110, 105, 0.07); }
 .chip-value { font-weight: 700; font-variant-numeric: tabular-nums; }
 .chip-count { font-size: 0.8125rem; opacity: 0.8; font-variant-numeric: tabular-nums; }
 
+.mode-group { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.875rem; }
+.mode-option { display: flex; flex-direction: column; gap: 0.5rem; }
+.mode-label { display: inline-flex; align-items: center; gap: 0.5rem; font-weight: 700; cursor: pointer; width: fit-content; }
+.mode-label input { width: 1.125rem; height: 1.125rem; margin: 0; accent-color: var(--teal); }
+.mode-body { padding-left: 1.625rem; }
+.mode-body.is-off { opacity: 0.45; }
 .advanced { margin-top: 1rem; }
 .advanced summary { cursor: pointer; color: var(--teal-ink); font-size: 0.9375rem; width: fit-content; }
 .advanced[open] summary { margin-bottom: 0.75rem; }
