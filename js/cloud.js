@@ -17,7 +17,9 @@
  *   開啟  登入後先把 Supabase 上最新的設定抓下來蓋掉本機備份，才載入各步驟
  *   離線  照常運作，改過的設定記為「還沒上傳」，下次連上網路時再傳
  *
- * 不用 supabase-js 套件，直接用 fetch 呼叫 Supabase 的 REST API（少一個要從網路載入的檔案）。
+ * 連線用 supabase-js 套件（vendor/supabase.js，放在專案裡，離線也能載入）。
+ * 雲端 Supabase、本機自架的 Supabase、公司主機上用 Docker 架的 Supabase 都用同一套寫法，
+ * 換資料庫時只要改 js/config.js 的 SUPABASE_URL、SUPABASE_KEY。
  */
 (function (global) {
   'use strict';
@@ -29,9 +31,11 @@
   var KEY = C.SUPABASE_KEY || '';
   var SCHEMA = C.SUPABASE_SCHEMA || 'ie_manpower';
   var APP = IEApp.projectId;
+  var LIB = global.supabase && typeof global.supabase.createClient === 'function' ? global.supabase : null;
   var ENABLED = !!(URL_BASE && KEY);
 
-  var SESSION_KEY = IEApp.storeKey('_session');   // 登入資訊（只存這台電腦）
+  var AUTH_KEY = IEApp.storeKey('_auth');         // supabase-js 存登入資訊的位置（只存這台電腦）
+  var OLD_SESSION_KEY = IEApp.storeKey('_session'); // 版本 31 以前自己存的登入資訊，第一次打開時搬給 supabase-js
   var SYNC_KEY = IEApp.storeKey('_sync');         // { dirty: { 'step9.otHours': true }, meta: { 'step9.otHours': { by, at } } }
   var PUSH_DELAY = 1000;
   var TIMEOUT = 10000;
@@ -46,8 +50,11 @@
   var LAYOUT_KEY = IEApp.storeKey('_layout');      // 本機備份的格式版本
   var LAYOUT = 3;                                  // 2 = 組名用步驟編號、一個輸入項目一筆；3 = shared 改名 step2-5
 
-  var session = null;          // { access_token, refresh_token, expires_at(ms), email }
-  var refreshing = null;
+  var client = null;           // supabase-js 的連線
+  var session = null;          // supabase-js 的登入資訊（session.user.email 是登入者）
+  var loggingOut = false;
+  var started = false;         // 開啟時的登入、同步做完了沒
+  var SLOW_START = 4000;       // 登入過的人，開啟時最多等這麼久；連不上就先用這台電腦的設定
   var pushTimer = null;
   var pushing = null;
   var status = { state: 'idle', text: '' };
@@ -131,95 +138,96 @@
   };
 
   /* ---------- 連線 ---------- */
-  function request(path, opts) {
-    opts = opts || {};
-    var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-    var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, TIMEOUT) : null;
-    var headers = Object.assign({ apikey: KEY }, opts.headers || {});
-    if (opts.json !== undefined) headers['Content-Type'] = 'application/json';
-    return fetch(URL_BASE + path, {
-      method: opts.method || 'GET',
-      headers: headers,
-      body: opts.json !== undefined ? JSON.stringify(opts.json) : undefined,
-      signal: ctrl ? ctrl.signal : undefined
-    }).then(function (res) {
-      if (timer) clearTimeout(timer);
-      return res.text().then(function (text) {
-        var data = null;
-        try { data = text ? JSON.parse(text) : null; } catch (e) { data = text; }
-        if (!res.ok) {
-          var err = new Error((data && (data.msg || data.message || data.error_description || data.error)) || ('HTTP ' + res.status));
-          err.status = res.status;
-          err.code = data && (data.error_code || data.code || data.error);
-          throw err;
-        }
-        return data;
-      });
-    }, function (e) {
-      if (timer) clearTimeout(timer);
-      var err = new Error('連不上 Supabase（網路中斷或被擋）');
-      err.network = true;
-      err.cause = e;
-      throw err;
+  // 每個請求最多等 TIMEOUT 毫秒，連不上時才不會一直卡在「同步中」
+  function timedFetch(input, init) {
+    init = init || {};
+    if (init.signal || typeof AbortController === 'undefined') return fetch(input, init);
+    var ctrl = new AbortController();
+    var timer = setTimeout(function () { ctrl.abort(); }, TIMEOUT);
+    return fetch(input, Object.assign({}, init, { signal: ctrl.signal })).then(function (res) {
+      clearTimeout(timer); return res;
+    }, function (e) { clearTimeout(timer); throw e; });
+  }
+
+  function createClient() {
+    return LIB.createClient(URL_BASE, KEY, {
+      db: { schema: SCHEMA },
+      auth: { storageKey: AUTH_KEY, persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+      global: { fetch: timedFetch }
     });
+  }
+
+  // 把 supabase-js 回傳的錯誤整理成：network（連不上）、auth（要重新登入）或一般錯誤
+  function toError(error, status) {
+    var msg = (error && (error.message || error.msg)) || String(error || '');
+    var err = new Error(msg);
+    err.status = status || (error && error.status) || 0;
+    err.code = error && error.code;
+    if (err.status === 0 || (error && error.name === 'AuthRetryableFetchError') ||
+        /Failed to fetch|NetworkError|Load failed|AbortError|FetchError|fetch failed/i.test(msg)) {
+      err.network = true;
+      err.message = '連不上 Supabase（網路中斷或被擋）';
+    } else if (err.status === 401 || err.code === 'PGRST301' || err.code === 'PGRST303' || /JWT/i.test(msg)) {
+      err.auth = true;
+    }
+    return err;
+  }
+
+  // 呼叫資料表（query 是回傳 supabase-js 查詢的函式）；登入憑證失效時換一次再試
+  function run(query, retried) {
+    if (!session) return Promise.reject(Object.assign(new Error('沒有登入'), { auth: true }));
+    return query().then(function (r) {
+      if (!r.error) return r.data;
+      var e = toError(r.error, r.status);
+      if (e.auth && !retried) {
+        return client.auth.refreshSession().then(function (x) {
+          if (x.error) throw Object.assign(toError(x.error), x.error.name === 'AuthRetryableFetchError' ? {} : { auth: true });
+          session = x.data.session;
+          return run(query, true);
+        });
+      }
+      throw e;
+    }, function (e) { throw toError(e); });
   }
 
   /* ---------- 登入 ---------- */
-  function saveSession(data, email) {
-    session = {
-      access_token: data.access_token,
-      refresh_token: data.refresh_token,
-      expires_at: Date.now() + (data.expires_in || 3600) * 1000,
-      email: (data.user && data.user.email) || email || (session && session.email) || ''
-    };
-    writeLocal(SESSION_KEY, JSON.stringify(session));
-    renderUser();
-  }
-  function clearSession() {
-    session = null;
-    writeLocal(SESSION_KEY, null);
+  function userEmail() { return session && session.user ? session.user.email || '' : ''; }
+
+  // 離線時 supabase-js 拿不到登入資訊，從它存在本機的資料讀出上次的登入者
+  function storedEmail() {
+    var v = readJson(AUTH_KEY, null);
+    return v && v.user ? v.user.email || '' : '';
   }
 
   function signIn(email, password) {
-    return request('/auth/v1/token?grant_type=password', { method: 'POST', json: { email: email, password: password } })
-      .then(function (data) { saveSession(data, email); });
-  }
-
-  function refresh() {
-    if (!session || !session.refresh_token) return Promise.reject(Object.assign(new Error('沒有登入'), { auth: true }));
-    if (!refreshing) {
-      refreshing = request('/auth/v1/token?grant_type=refresh_token', { method: 'POST', json: { refresh_token: session.refresh_token } })
-        .then(function (data) { saveSession(data); })
-        .catch(function (e) {
-          if (!e.network) e.auth = true;      // 被 Supabase 拒絕（例如帳號被停用）＝要重新登入
-          throw e;
-        })
-        .then(function (v) { refreshing = null; return v; }, function (e) { refreshing = null; throw e; });
-    }
-    return refreshing;
-  }
-
-  // 拿到有效的登入憑證（快過期就先換新的）
-  function token() {
-    if (!session) return Promise.reject(Object.assign(new Error('沒有登入'), { auth: true }));
-    if (session.expires_at - 60000 > Date.now()) return Promise.resolve(session.access_token);
-    return refresh().then(function () { return session.access_token; });
-  }
-
-  // 帶登入憑證呼叫資料表；憑證失效時換一次再試
-  function api(path, opts, retried) {
-    return token().then(function (t) {
-      var o = Object.assign({}, opts);
-      o.headers = Object.assign({ Authorization: 'Bearer ' + t }, opts.headers || {});
-      return request(path, o);
-    }).catch(function (e) {
-      if (e.status === 401 && !retried) {
-        session.expires_at = 0;
-        return api(path, opts, true);
-      }
-      if (e.status === 401) e.auth = true;
-      throw e;
+    return client.auth.signInWithPassword({ email: email, password: password }).then(function (r) {
+      if (r.error) throw toError(r.error);
+      session = r.data.session;
+      renderUser();
     });
+  }
+
+  // 版本 31 以前的登入資訊交給 supabase-js，已經登入的人不用重新登入
+  function adoptOldSession() {
+    var old = readJson(OLD_SESSION_KEY, null);
+    if (!old || !old.refresh_token) return Promise.resolve(null);
+    return client.auth.setSession({ access_token: old.access_token, refresh_token: old.refresh_token }).then(function (r) {
+      if (r.error && r.error.name === 'AuthRetryableFetchError') return null;   // 離線：下次有網路再搬
+      writeLocal(OLD_SESSION_KEY, null);
+      return r.error ? null : r.data.session;
+    }, function () { return null; });
+  }
+
+  // 開啟時拿登入資訊：'ok'、'offline'（有登入過但連不上）或 'login'（要登入）
+  function restoreSession() {
+    return client.auth.getSession().then(function (r) {
+      if (r.data && r.data.session) { session = r.data.session; return 'ok'; }
+      if (r.error && toError(r.error).network) return 'offline';
+      return adoptOldSession().then(function (s) {
+        if (s) { session = s; return 'ok'; }
+        return readJson(OLD_SESSION_KEY, null) ? 'offline' : 'login';
+      });
+    }, function (e) { return toError(e).network && storedEmail() ? 'offline' : 'login'; });
   }
 
   /* ---------- 同步 ---------- */
@@ -227,8 +235,11 @@
   // 本機有、雲端沒有的輸入項目，標成要上傳（第一次使用時把這台電腦原本的設定傳上去）。
   function pull() {
     setStatus('busy', '同步中…');
-    return api('/rest/v1/settings?app=eq.' + encodeURIComponent(APP) + '&select=key,value,updated_at,updated_by',
-      { headers: { 'Accept-Profile': SCHEMA } })
+    return run(function () {
+      var q = client.from('settings').select('key,value,updated_at,updated_by').eq('app', APP);
+      // 連不上時不要讓 supabase-js 自己重試好幾次（離線打開會多等好幾秒）；連上網路時這裡會自己再同步
+      return typeof q.retry === 'function' ? q.retry(false) : q;
+    })
       .then(function (rows) {
         var s = syncState();
         var groups = {};                               // 要寫回本機的設定組
@@ -306,10 +317,8 @@
       return Promise.resolve();
     }
     setStatus('busy', '同步中…');
-    pushing = api('/rest/v1/settings?on_conflict=app,key', {
-      method: 'POST',
-      json: rows,
-      headers: { 'Content-Profile': SCHEMA, Prefer: 'resolution=merge-duplicates,return=representation' }
+    pushing = run(function () {
+      return client.from('settings').upsert(rows, { onConflict: 'app,key' }).select('key,updated_at,updated_by');
     }).then(function (saved) {
       var st = syncState();
       skipped.forEach(function (n) { delete st.dirty[n]; });
@@ -348,9 +357,10 @@
 
   function renderUser() {
     if (!els.user) return;
-    els.user.textContent = session && session.email ? shortName(session.email) : '';
-    els.user.title = session && session.email ? session.email : '';
-    els.logout.hidden = !session;
+    var email = userEmail() || storedEmail();
+    els.user.textContent = email ? shortName(email) : '';
+    els.user.title = email;
+    els.logout.hidden = !email;
   }
 
   function buildTopbar() {
@@ -397,13 +407,13 @@
   }
 
   /* ---------- 畫面：登入 ---------- */
-  var loginResolve = null;
+  var loginWaiters = [];       // 等登入完成的地方（開啟時的流程、用到一半過期）
 
   function showLogin(expired) {
     setStatus('busy', '請登入');
-    if (els.login) return new Promise(function (res) { loginResolve = res; });
+    if (els.login) return new Promise(function (res) { loginWaiters.push(res); });
     var email = h('input', { id: 'login-email', type: 'email', class: 'in', autocomplete: 'username', required: true,
-      value: (session && session.email) || '' });
+      value: userEmail() || storedEmail() });
     var pass = h('input', { id: 'login-pass', type: 'password', class: 'in', autocomplete: 'current-password', required: true });
     var msg = h('p', { class: 'msg is-error', role: 'alert', hidden: true });
     var btn = h('button', { type: 'submit', class: 'btn-primary', text: '登入' });
@@ -420,9 +430,9 @@
       btn.textContent = '登入中…';
       signIn(email.value.trim(), pass.value).then(function () {
         hideLogin();
-        var r = loginResolve; loginResolve = null;
-        if (r) r();
-        else pull();                        // 用到一半過期、重新登入後補上傳
+        var waiting = loginWaiters; loginWaiters = [];
+        waiting.forEach(function (res) { res(); });
+        if (started) pull();                // 開啟後才要求登入（過期、換了資料庫）：登入後補同步
       }).catch(function (err) {
         msg.textContent = err.network ? '連不上 Supabase，請確認網路後再試。'
           : (err.code === 'invalid_credentials' || err.status === 400) ? '帳號或密碼不對。'
@@ -435,7 +445,7 @@
     els.login = h('div', { class: 'login-overlay', role: 'dialog', 'aria-modal': 'true' }, form);
     document.body.appendChild(els.login);
     setTimeout(function () { (email.value ? pass : email).focus(); }, 0);
-    return new Promise(function (res) { loginResolve = res; });
+    return new Promise(function (res) { loginWaiters.push(res); });
   }
 
   function hideLogin() {
@@ -445,11 +455,10 @@
   function logout() {
     var pending = Object.keys(syncState().dirty).length;
     if (pending && !global.confirm('這台電腦還有 ' + pending + ' 組設定沒上傳，登出後要等下次登入才會上傳。確定要登出嗎？')) return;
-    var t = session && session.access_token;
-    clearSession();
+    loggingOut = true;
     var done = function () { global.location.reload(); };
-    if (t) request('/auth/v1/logout', { method: 'POST', headers: { Authorization: 'Bearer ' + t } }).then(done, done);
-    else done();
+    // scope local：只登出這台電腦；連不上 Supabase 也會清掉本機的登入資訊
+    client.auth.signOut({ scope: 'local' }).then(done, done);
   }
 
   /* ---------- 開啟時 ---------- */
@@ -457,19 +466,54 @@
   function start() {
     buildTopbar();
     if (!ENABLED) { setStatus('off', ''); return Promise.resolve(); }
-    session = readJson(SESSION_KEY, null);
+    if (!LIB) {
+      setStatus('error', '找不到 supabase-js（vendor/supabase.js），設定只存在這台電腦');
+      return Promise.resolve();
+    }
+    client = createClient();
+    client.auth.onAuthStateChange(function (event, s) {
+      var had = !!session;
+      if (s) session = s;
+      // 登入被 Supabase 取消（例如帳號停用、在後台被登出）時請使用者重新登入
+      // （開啟時的登入由 start 自己處理，這裡只管用到一半被登出）
+      if (event === 'SIGNED_OUT' && !loggingOut) {
+        session = null;
+        if (started) setTimeout(function () { handleError({ auth: true }); }, 0);
+        return;
+      }
+      // 離線打開、之後 supabase-js 自己換到新的登入憑證：補做同步
+      if (!had && s && started) setTimeout(function () { renderUser(); pull(); }, 0);
+    });
     renderUser();
-    var ready = session ? token().catch(function (e) {
-      if (e.network) return 'offline';               // 沒網路：先用這台電腦的設定
-      clearSession();
-      return showLogin(true);
-    }) : showLogin(false);
-    return ready.then(function (r) {
-      if (r === 'offline') { setStatus('offline', '離線：設定先存在這台電腦，連上網路後會自動上傳'); return; }
+    var restoring = restoreSession();
+    // 登入過的人：連不上 Supabase 時（supabase-js 會一直重試換憑證）不要卡著，先用這台電腦的設定
+    var first = storedEmail() || readJson(OLD_SESSION_KEY, null)
+      ? Promise.race([restoring, new Promise(function (res) { setTimeout(function () { res('slow'); }, SLOW_START); })])
+      : restoring;
+    return first.then(function (r) {
+      renderUser();
+      if (r === 'offline' || r === 'slow') {
+        setStatus('offline', '離線：設定先存在這台電腦，連上網路後會自動上傳');
+        if (r === 'slow') restoring.then(function (r2) { afterRestore(r2); });
+        return 'offline';
+      }
+      if (r === 'login') return showLogin(false);
+    }).then(function (r) {
+      if (r === 'offline') return;
       return pull();
     }).then(function () {
-      global.addEventListener('online', function () { if (session) pull(); });
+      started = true;
+      global.addEventListener('online', function () {
+        if (session) { pull(); return; }
+        restoreSession().then(afterRestore);
+      });
     });
+  }
+
+  // 開啟後才拿到結果的登入狀態（原本離線）
+  function afterRestore(r) {
+    if (r === 'ok' && session) { renderUser(); pull(); }
+    else if (r === 'login') showLogin(true);
   }
 
   // 本機備份從舊組名搬到新組名（只做一次；要先全部讀出來再寫，因為 step3→step4、step4→step5 會接在一起）

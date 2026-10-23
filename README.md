@@ -97,7 +97,7 @@ P003 的 Labor 是做 Base Qty 個的工時（Base Qty 有 1 也有 100），除
 
 1. 第 4 步的 Excel：剛做完第 4 步的話會直接沿用；也可以上傳之前第 4 步匯出的檔案。
 2. 確認當月 WIP 在哪一行、各月產量在哪幾行（預設是第 4 行和第 5 到 10 行）。這組設定和第 2 步共用，在其中一步改了，另一步也會跟著變。CT. 會自動找表頭是 `CT.` 的那一行。
-3. 輸入各月的表頭（例如 Oct、Nov）。月份由你自己輸入，程式不會去 MPS 的表頭找。
+3. 輸入各月的表頭。第一個（當月）用下拉選單選 Jan～Dec，再按最後一個框後面的「自動帶出後面月份」，後面幾個月會依序填好（Dec 之後接 Jan）；後面的月份也可以自己改。程式不會去 MPS 的表頭找，月份也不會記住或上傳。
 4. 按「匯出 Excel」，得到 `…_CT_需求工時.xlsx`。
 
 結果：
@@ -310,6 +310,7 @@ js/steps/step7-rma.js           第 7 步　RMA 需求工時
 js/steps/step8-manpower.js      第 8 步　匯入人力報表
 js/steps/step9-report.js        第 9 步　總表
 js/steps/step10-rma-manpower.js 第 10 步　RMA人力需求
+vendor/supabase.js          supabase-js 2.117.3（連 Supabase 用，必要）
 vendor/                     ExcelJS 本機副本（可選）
 icons/                      圖示
 啟動小程式.command           在 Mac 上啟動
@@ -358,10 +359,31 @@ icons/                      圖示
 | `step9.otHours`、`step9.otRate`、`step9.offDirect`、`step9.offIndirect`、`step9.yoLimit` | 第 9 步：每日加班小時、加班出勤人數 %、Off line 直接／間接人數、YO 加班上限 |
 | `step10.version` | 第 10 步：Cut-off 版次 |
 - 不記住的欄位（平日工作天數、RMA 數量、Cut-off 日期）照舊每次輸入，不會上傳。
-- 程式在 `js/cloud.js`，直接用 fetch 呼叫 Supabase 的 REST API（沒有用 supabase-js 套件）。各步驟用 `IEApp.settings.read('step9')`／`IEApp.settings.write('step9', 物件)` 讀寫一整步的設定，`cloud.js` 負責拆成一個個輸入項目上傳、下載時再組回去。
+- 程式在 `js/cloud.js`，用 supabase-js 套件連線（`vendor/supabase.js`，版本 2.117.3，放在專案裡，離線也載得到）。雲端、本機自架、公司主機上的 Supabase 都用同一套程式，換資料庫只改 `js/config.js` 的 `SUPABASE_URL`、`SUPABASE_KEY`。各步驟用 `IEApp.settings.read('step9')`／`IEApp.settings.write('step9', 物件)` 讀寫一整步的設定，`cloud.js` 負責拆成一個個輸入項目上傳、下載時再組回去。
 - Supabase 的網址和 publishable key 在 `js/config.js`。publishable key 本來就是公開用的；安全靠登入和資料表的權限規則（只有登入的人能讀寫，不能刪除）。`secret`／`service_role` key 不可以放進程式。
+- 登入資訊由 supabase-js 存在這台電腦的 `ie-manpower-3F-image-lens._auth`，會自己換新憑證。版本 31 以前存的 `._session` 第一次打開時會交給 supabase-js，已經登入的人不用重新登入。
+- 有登入過的人打開時，如果 4 秒內連不上 Supabase，就先用這台電腦的設定，連上之後自動同步。
 
-建立資料庫的 SQL（已經在 Supabase 的 SQL Editor 執行過；Data API 的 Exposed schemas 要加上 `ie_manpower`）：
+### 換一個 Supabase（本機自架、公司主機）
+
+每個新的 Supabase 都要做一次：
+
+1. 執行下面的 SQL（Studio 的 SQL Editor）。
+2. 讓 API 看得到 `ie_manpower` schema：
+   - 雲端：Settings → Data API → Exposed schemas 加上 `ie_manpower`。
+   - Mac 上的 supabase CLI：`supabase/config.toml` 的 `[api]` 裡 `schemas` 加上 `"ie_manpower"`，再 `supabase stop` / `supabase start`。
+   - Docker 自架：docker 資料夾 `.env` 的 `PGRST_DB_SCHEMAS` 加上 `,ie_manpower`，再 `docker compose up -d` 重啟。
+3. 關閉自行註冊：CLI 是 `config.toml` 的 `[auth] enable_signup = false`；Docker 是 `.env` 的 `DISABLE_SIGNUP=true`。
+4. 在 Studio 的 Authentication → Users 新增同事的帳號（email + 密碼，勾 Auto Confirm）。
+5. 改 `js/config.js` 的 `SUPABASE_URL`、`SUPABASE_KEY`（各環境要填什麼寫在檔案開頭）。
+
+搬到公司主機時要注意：
+
+- 別台電腦連的網址要寫主機的 IP 或名稱，不能寫 `127.0.0.1`／`localhost`（那是指使用者自己的電腦）。
+- 用 https 網址打開的程式（例如 GitHub Pages）不能連 http 的 Supabase（瀏覽器會擋）。程式和 Supabase 要都是 http（例如程式也放在公司主機上），或都是 https。
+- 離線快取（Service Worker）和「安裝成 App」只在 https 或 `localhost` 打開時才有；用 `http://主機IP` 打開時程式照常能用，但沒有離線功能。
+
+建立資料庫的 SQL（雲端 Supabase 已經執行過；Exposed schemas 要加上 `ie_manpower`，見上面第 2 點）：
 
 ```sql
 create schema if not exists ie_manpower;
