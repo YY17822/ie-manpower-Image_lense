@@ -314,6 +314,7 @@ vendor/supabase.js          supabase-js 2.117.3（連 Supabase 用，必要）
 vendor/                     ExcelJS 本機副本（可選）
 icons/                      圖示
 啟動小程式.command           在 Mac 上啟動
+.gitignore                  不進 git 的檔案（.DS_Store、.env）
 ```
 
 新增步驟時：在 `js/steps/` 加一個檔案、在 `index.html` 加一行 `<script>`、
