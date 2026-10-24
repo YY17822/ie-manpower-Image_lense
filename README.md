@@ -292,7 +292,7 @@ ExcelJS 4.x 只看到標籤就當成「有」，結果匯出後整張表被畫�
 
 ```
 index.html                  主畫面
-js/config.js                專案代號、Supabase 網址和 publishable key
+js/config.js                專案代號、Supabase 網址和公開鑰匙（SUPABASE_PUBLIC_URL、SUPABASE_PUBLISHABLE_KEY）
 js/cloud.js                 登入與共用設定（Supabase）
 manifest.webmanifest        安裝成 App 用的資訊
 sw.js                       離線快取
@@ -359,8 +359,17 @@ icons/                      圖示
 | `step9.otHours`、`step9.otRate`、`step9.offDirect`、`step9.offIndirect`、`step9.yoLimit` | 第 9 步：每日加班小時、加班出勤人數 %、Off line 直接／間接人數、YO 加班上限 |
 | `step10.version` | 第 10 步：Cut-off 版次 |
 - 不記住的欄位（平日工作天數、RMA 數量、Cut-off 日期）照舊每次輸入，不會上傳。
-- 程式在 `js/cloud.js`，用 supabase-js 套件連線（`vendor/supabase.js`，版本 2.117.3，放在專案裡，離線也載得到）。雲端、本機自架、公司主機上的 Supabase 都用同一套程式，換資料庫只改 `js/config.js` 的 `SUPABASE_URL`、`SUPABASE_KEY`。各步驟用 `IEApp.settings.read('step9')`／`IEApp.settings.write('step9', 物件)` 讀寫一整步的設定，`cloud.js` 負責拆成一個個輸入項目上傳、下載時再組回去。
-- Supabase 的網址和 publishable key 在 `js/config.js`。publishable key 本來就是公開用的；安全靠登入和資料表的權限規則（只有登入的人能讀寫，不能刪除）。`secret`／`service_role` key 不可以放進程式。
+- 程式在 `js/cloud.js`，用 supabase-js 套件連線（`vendor/supabase.js`，版本 2.117.3，放在專案裡，離線也載得到）。雲端、本機自架、公司主機上的 Supabase 都用同一套程式，換資料庫只改 `js/config.js` 的 `SUPABASE_PUBLIC_URL`、`SUPABASE_PUBLISHABLE_KEY`。各步驟用 `IEApp.settings.read('step9')`／`IEApp.settings.write('step9', 物件)` 讀寫一整步的設定，`cloud.js` 負責拆成一個個輸入項目上傳、下載時再組回去。
+- Supabase 的網址和公開鑰匙在 `js/config.js`。公開鑰匙本來就是公開用的；安全靠登入和資料表的權限規則（只有登入的人能讀寫，不能刪除）。`SUPABASE_SECRET_KEY`（舊式名稱：`SERVICE_ROLE_KEY`）不可以放進程式。
+- 取名原則：`js/config.js` 的設定名稱照自架 Supabase 的 `.env` 取，兩邊找得到同一個名字。
+
+  | `js/config.js` | 對應自架 `.env` | 說明 |
+  | --- | --- | --- |
+  | `SUPABASE_PUBLIC_URL` | `SUPABASE_PUBLIC_URL` | Supabase 網址 |
+  | `SUPABASE_PUBLISHABLE_KEY` | `SUPABASE_PUBLISHABLE_KEY`（舊式名稱：`ANON_KEY`） | 公開鑰匙，`sb_publishable_` 開頭 |
+  | `SUPABASE_SCHEMA` | `PGRST_DB_SCHEMAS` 清單裡的其中一個 | 這個程式用的 schema（`ie_manpower`） |
+
+  版本 33 以前叫 `SUPABASE_URL`、`SUPABASE_KEY`，`cloud.js` 還讀得到舊名稱，但新專案一律用上面的名稱。
 - 登入資訊由 supabase-js 存在這台電腦的 `ie-manpower-3F-image-lens._auth`，會自己換新憑證。版本 31 以前存的 `._session` 第一次打開時會交給 supabase-js，已經登入的人不用重新登入。
 - 有登入過的人打開時，如果 4 秒內連不上 Supabase，就先用這台電腦的設定，連上之後自動同步。
 
@@ -375,7 +384,7 @@ icons/                      圖示
    - Docker 自架：docker 資料夾 `.env` 的 `PGRST_DB_SCHEMAS` 加上 `,ie_manpower`，再 `docker compose up -d` 重啟。
 3. 關閉自行註冊：CLI 是 `config.toml` 的 `[auth] enable_signup = false`；Docker 是 `.env` 的 `DISABLE_SIGNUP=true`。
 4. 在 Studio 的 Authentication → Users 新增同事的帳號（email + 密碼，勾 Auto Confirm）。
-5. 改 `js/config.js` 的 `SUPABASE_URL`、`SUPABASE_KEY`（各環境要填什麼寫在檔案開頭）。
+5. 改 `js/config.js` 的 `SUPABASE_PUBLIC_URL`、`SUPABASE_PUBLISHABLE_KEY`（各環境要填什麼寫在檔案開頭）。
 
 搬到公司主機時要注意：
 

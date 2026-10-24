@@ -2,7 +2,7 @@
  * cloud.js — 登入與共用設定（Supabase）。
  *
  * 部門的人共用同一份「記住的設定」：誰最後存，大家打開看到的就是誰的。
- *   資料庫  Supabase 專案（js/config.js 的 SUPABASE_URL / SUPABASE_KEY）
+ *   資料庫  Supabase 專案（js/config.js 的 SUPABASE_PUBLIC_URL / SUPABASE_PUBLISHABLE_KEY）
  *   位置    schema ie_manpower 的 settings 表，一筆 = (app, key) → value(jsonb)
  *           app 是這個 PWA 的專案代號（PROJECT_ID）
  *           key 是「步驟.輸入項目」，例如 step9.otHours（第 9 步的每日加班小時）
@@ -19,7 +19,7 @@
  *
  * 連線用 supabase-js 套件（vendor/supabase.js，放在專案裡，離線也能載入）。
  * 雲端 Supabase、本機自架的 Supabase、公司主機上用 Docker 架的 Supabase 都用同一套寫法，
- * 換資料庫時只要改 js/config.js 的 SUPABASE_URL、SUPABASE_KEY。
+ * 換資料庫時只要改 js/config.js 的 SUPABASE_PUBLIC_URL、SUPABASE_PUBLISHABLE_KEY。
  */
 (function (global) {
   'use strict';
@@ -27,8 +27,10 @@
   var IEApp = global.IEApp;
   var h = IEApp.h;
   var C = global.APP_CONFIG || {};
-  var URL_BASE = String(C.SUPABASE_URL || '').replace(/\/+$/, '');
-  var KEY = C.SUPABASE_KEY || '';
+  // 設定名稱照自架 Supabase 的 .env（SUPABASE_PUBLIC_URL、SUPABASE_PUBLISHABLE_KEY）；
+  // 版本 33 以前叫 SUPABASE_URL、SUPABASE_KEY，舊名稱也還讀得到
+  var URL_BASE = String(C.SUPABASE_PUBLIC_URL || C.SUPABASE_URL || '').replace(/\/+$/, '');
+  var KEY = C.SUPABASE_PUBLISHABLE_KEY || C.SUPABASE_KEY || '';
   var SCHEMA = C.SUPABASE_SCHEMA || 'ie_manpower';
   var APP = IEApp.projectId;
   var LIB = global.supabase && typeof global.supabase.createClient === 'function' ? global.supabase : null;
