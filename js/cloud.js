@@ -27,10 +27,9 @@
   var IEApp = global.IEApp;
   var h = IEApp.h;
   var C = global.APP_CONFIG || {};
-  // 設定名稱照自架 Supabase 的 .env（SUPABASE_PUBLIC_URL、SUPABASE_PUBLISHABLE_KEY）；
-  // 版本 33 以前叫 SUPABASE_URL、SUPABASE_KEY，舊名稱也還讀得到
-  var URL_BASE = String(C.SUPABASE_PUBLIC_URL || C.SUPABASE_URL || '').replace(/\/+$/, '');
-  var KEY = C.SUPABASE_PUBLISHABLE_KEY || C.SUPABASE_KEY || '';
+  // 設定名稱照自架 Supabase 的 .env（SUPABASE_PUBLIC_URL、SUPABASE_PUBLISHABLE_KEY）
+  var URL_BASE = String(C.SUPABASE_PUBLIC_URL || '').replace(/\/+$/, '');
+  var KEY = C.SUPABASE_PUBLISHABLE_KEY || '';
   var SCHEMA = C.SUPABASE_SCHEMA || 'ie_manpower';
   var APP = IEApp.projectId;
   var LIB = global.supabase && typeof global.supabase.createClient === 'function' ? global.supabase : null;

@@ -369,7 +369,7 @@ icons/                      圖示
   | `SUPABASE_PUBLISHABLE_KEY` | `SUPABASE_PUBLISHABLE_KEY`（舊式名稱：`ANON_KEY`） | 公開鑰匙，`sb_publishable_` 開頭 |
   | `SUPABASE_SCHEMA` | `PGRST_DB_SCHEMAS` 清單裡的其中一個 | 這個程式用的 schema（`ie_manpower`） |
 
-  版本 33 以前叫 `SUPABASE_URL`、`SUPABASE_KEY`，`cloud.js` 還讀得到舊名稱，但新專案一律用上面的名稱。
+  版本 33 以前叫 `SUPABASE_URL`、`SUPABASE_KEY`，版本 35 起只認上面的新名稱。
 - 登入資訊由 supabase-js 存在這台電腦的 `ie-manpower-3F-image-lens._auth`，會自己換新憑證。版本 31 以前存的 `._session` 第一次打開時會交給 supabase-js，已經登入的人不用重新登入。
 - 有登入過的人打開時，如果 4 秒內連不上 Supabase，就先用這台電腦的設定，連上之後自動同步。
 
