@@ -4,6 +4,8 @@
  *   2. 選取條件，兩種方式二選一：
  *        a. A 行等於多少（原本的方式；A 行可在「報表版面不一樣時」改成別的行）
  *        b. 指定某一行，等於或不等於某些值
+ *           「不等於」時可勾「排除這一行空白的列」（預設勾選），把分類之間的「x」「TTL (…)」
+ *           小計列拿掉；被排除的列會逐列列出，取消勾選的那列會保留（不記住，因為每個月列號不同）
  *      符合的列才留下（從第 5 列開始比對）
  *   3. 輸入要保留哪些行
  *   4. 匯出新的 Excel，第 1–4 列表頭（含合併儲存格）原樣保留
@@ -26,10 +28,13 @@
 
   // mode：'a' = A 行等於（原本的方式）、'col' = 指定某一行等於／不等於
   // fCol、fOp（'eq' 等於、'ne' 不等於）、fValues：指定某一行的條件
-  var DEFAULTS = { values: '', cols: '', startRow: 5, selCol: 'A', mode: 'a', fCol: '', fOp: 'eq', fValues: '' };
+  // fSkipBlank：「不等於」時排除那一行空白的列
+  var DEFAULTS = { values: '', cols: '', startRow: 5, selCol: 'A', mode: 'a', fCol: '', fOp: 'eq', fValues: '', fSkipBlank: true };
+  var MAX_BLANK_LIST = 200;  // 空白列清單最多列幾列
 
   // 這一步的狀態（切到別的步驟再回來時還在）
-  var S = { fileName: '', workbook: null, ws: null, info: null, infoKey: '', result: null };
+  // keepBlank：空白列清單裡使用者取消勾選（要保留）的列號 { 52: true }；換檔案、換行、換起始列時清空
+  var S = { fileName: '', workbook: null, ws: null, info: null, infoKey: '', result: null, keepBlank: {}, blankKey: '' };
   var settings = loadSettings();
   var els = {};
   var timer = null;
@@ -57,6 +62,7 @@
   }
   function byColumn() { return settings.mode === 'col'; }
   function exclude() { return byColumn() && settings.fOp === 'ne'; }
+  function skipBlank() { return exclude() && settings.fSkipBlank !== false; }
   // 指定某一行的方式：行號看不懂或沒填時回傳 0
   function fCol() {
     var p = XIO.parseColumns(settings.fCol);
@@ -114,6 +120,11 @@
       h('label', { for: 'f-values' }, els.selLabel, ' 行等於'), els.values);
     els.rowCol = h('div', { class: 'field-row mode-body' },
       els.fCol, h('span', { text: '行' }), els.fOp, els.fValues);
+    els.skipBlank = h('input', { type: 'checkbox', id: 'f-skipblank' });
+    els.skipBlank.checked = settings.fSkipBlank !== false;
+    els.skipRow = h('div', { class: 'field-row mode-body skip-blank' },
+      h('label', { class: 'check-label', for: 'f-skipblank' }, els.skipBlank, h('span', { text: '排除這一行空白的列' })));
+    els.blankList = h('div', { class: 'blank-list mode-body' });
 
     els.cols = h('input', {
       id: 'f-cols', type: 'text', class: 'in in-wide', autocomplete: 'off', spellcheck: 'false',
@@ -154,8 +165,8 @@
             els.rowA),
           h('div', { class: 'mode-option' },
             h('label', { class: 'mode-label', for: 'f-mode-col' }, els.modeCol, h('span', { text: '指定某一行，等於或不等於某些值' })),
-            els.rowCol)),
-        h('p', { class: 'hint', text: '兩種方式二選一。要選多個值時用逗號分開，例如 1, 3。選「不等於」時，那一行是空白的列也會保留。' }),
+            els.rowCol, els.skipRow, els.blankList)),
+        h('p', { class: 'hint', text: '兩種方式二選一。要選多個值時用逗號分開，例如 1, 3。選「不等於」時，可以勾「排除這一行空白的列」，把分類之間的 x、TTL 小計列拿掉。' }),
         els.chips),
       h('li', { class: 'task' },
         h('h2', { text: '要保留的行' }),
@@ -181,6 +192,7 @@
     bindInput(els.fCol, 'fCol');
     bindInput(els.fValues, 'fValues');
     els.fOp.addEventListener('change', function () { settings.fOp = els.fOp.value; recompute(); });
+    els.skipBlank.addEventListener('change', function () { settings.fSkipBlank = els.skipBlank.checked; setMode('col'); recompute(); });
     [els.modeA, els.modeCol].forEach(function (r) {
       r.addEventListener('change', function () { if (r.checked) { settings.mode = r.value; recompute(); } });
     });
@@ -259,6 +271,10 @@
     els.modeCol.checked = byColumn();
     els.rowA.classList.toggle('is-off', byColumn());
     els.rowCol.classList.toggle('is-off', !byColumn());
+    els.skipRow.hidden = !exclude();
+    els.skipRow.classList.toggle('is-off', !byColumn());
+    els.skipBlank.checked = settings.fSkipBlank !== false;
+    els.blankList.textContent = '';
 
     if (!S.ws) {
       els.chips.textContent = '';
@@ -326,11 +342,21 @@
 
     // 這組條件存起來：匯出、以及第 2 步要重新產生活頁簿時都用同一組
     var ws = S.ws;
+    var blanks = [];
+    var keepBlank = {};
+    if (skipBlank()) {
+      var bkey = S.fileName + '|' + (ws.name || '') + '|' + sr + '|' + sc;
+      if (S.blankKey !== bkey) { S.blankKey = bkey; S.keepBlank = {}; }
+      blanks = XIO.blankRows(ws, { dataStartRow: sr, selectorCol: sc, lastRow: info.lastRow, keepCols: parsed.cols });
+      blanks.forEach(function (b) { if (S.keepBlank[b.row]) keepBlank[b.row] = true; });
+      renderBlankList(blanks, colName);
+    }
     var opts = {
       dataStartRow: sr, selectorCol: sc, values: values, keepCols: parsed.cols, lastRow: info.lastRow,
-      exclude: exclude()
+      exclude: exclude(), skipBlank: skipBlank(), keepBlankRows: keepBlank
     };
     var result = XIO.filter(ws, opts);
+    var skipped = blanks.length - Object.keys(keepBlank).length;
 
     if (!result.matchedRows) {
       var seen = info.values.slice(0, 8).map(function (v) { return v.label; }).join('、');
@@ -342,6 +368,9 @@
     S.result = result;
     var text = colName + ' 行' + opWord + ' ' + values.join('、') + '：符合 ' + result.matchedRows.toLocaleString('en-US') + ' 列（共 ' +
       result.totalRows.toLocaleString('en-US') + ' 列資料），保留 ' + parsed.cols.length + ' 行。';
+    if (skipBlank() && blanks.length) {
+      text += ' 另外排除 ' + colName + ' 行空白的 ' + skipped + ' 列' + (skipped < blanks.length ? '（保留 ' + (blanks.length - skipped) + ' 列）' : '') + '。';
+    }
     var beyond = parsed.cols.filter(function (c) { return c > info.colCount; });
     if (beyond.length) text += ' 注意：' + XIO.formatColumns(beyond) + ' 行在報表裡沒有資料。';
     setSummary(text, false, beyond.length > 0);
@@ -365,6 +394,47 @@
       headerEnd: result.headerEnd,
       build: function () { return XIO.filter(ws, opts).workbook; }
     };
+  }
+
+  /* ---------- 「不等於」時，選取行空白的列清單（打勾＝排除，取消勾選＝保留） ---------- */
+  function renderBlankList(blanks, colName) {
+    els.blankList.textContent = '';
+    if (!blanks.length) {
+      els.blankList.appendChild(h('p', { class: 'blank-none', text: colName + ' 行沒有空白的列。' }));
+      return;
+    }
+    var kept = blanks.filter(function (b) { return S.keepBlank[b.row]; }).length;
+    var head = h('div', { class: 'blank-head' },
+      h('span', { text: colName + ' 行空白的列：' + blanks.length + ' 列，打勾的會排除' + (kept ? '（已取消 ' + kept + ' 列，會保留）' : '') }),
+      h('button', { type: 'button', class: 'link-btn', text: '全部排除', onclick: function () { S.keepBlank = {}; recompute(); } }),
+      h('button', { type: 'button', class: 'link-btn', text: '全部保留', onclick: function () {
+        blanks.forEach(function (b) { S.keepBlank[b.row] = true; }); recompute();
+      } }));
+    var list = h('ul', { class: 'blank-items' });
+    blanks.slice(0, MAX_BLANK_LIST).forEach(function (b) {
+      var id = 'f-blank-' + b.row;
+      var box = h('input', { type: 'checkbox', id: id });
+      box.checked = !S.keepBlank[b.row];
+      box.addEventListener('change', function () {
+        if (box.checked) delete S.keepBlank[b.row]; else S.keepBlank[b.row] = true;
+        var scroller = els.blankList.querySelector('.blank-items');
+        var top = scroller ? scroller.scrollTop : 0;
+        recompute();
+        scroller = els.blankList.querySelector('.blank-items');
+        if (scroller) scroller.scrollTop = top;
+        var again = document.getElementById(id);
+        if (again) again.focus({ preventScroll: true });
+      });
+      list.appendChild(h('li', { class: box.checked ? '' : 'is-kept' },
+        h('label', { for: id }, box,
+          h('span', { class: 'blank-row', text: '第 ' + b.row + ' 列' }),
+          h('span', { class: 'blank-text', text: b.text || '（保留的行以外有資料）' }))));
+    });
+    if (blanks.length > MAX_BLANK_LIST) {
+      list.appendChild(h('li', { class: 'blank-more', text: '另有 ' + (blanks.length - MAX_BLANK_LIST) + ' 列沒有列出（一樣會排除）' }));
+    }
+    els.blankList.appendChild(head);
+    els.blankList.appendChild(list);
   }
 
   function keepMap() {

@@ -553,6 +553,8 @@
    *   selectorCol   選取條件所在的行（數字，A=1）
    *   values        要選取的值（字串陣列）
    *   exclude       true = 保留「不等於」這些值的列（選取的行空白也保留，但整列空白的不要）
+   *   skipBlank     exclude 時：選取的行空白的列也不要（例如分類之間的「x」「TTL (…)」小計列）
+   *   keepBlankRows skipBlank 時仍要保留的列號 { 52: true }（使用者在清單上取消勾選的）
    *   keepCols      要保留的行（數字陣列，已排序）
    *   lastRow       最後一列資料的列號
    *
@@ -564,6 +566,35 @@
   function withoutFill(style) {
     var out = Object.assign({}, style || {});
     delete out.fill;
+    return out;
+  }
+
+  /*
+   * 「不等於」時選取的行是空白、但不是整列空白的列（例如分類之間的「x」「TTL (…)」小計列），
+   * 給第 1 步列出來讓使用者確認要不要排除。
+   *   opts  { dataStartRow, selectorCol, lastRow, keepCols }
+   *   回傳  [{ row: 列號, text: 這一列有寫字的前幾格（從 A 行起，用｜分開）}]
+   */
+  function blankRows(ws, opts) {
+    var out = [];
+    var colCount = extent(ws).colCount;
+    for (var r = opts.dataStartRow; r <= opts.lastRow; r++) {
+      var row = ws.findRow(r);
+      if (!row) continue;
+      if (matchKey(cellRawValue(row.findCell(opts.selectorCol))) !== '') continue;
+      var hasKept = opts.keepCols.some(function (c) {
+        var v = plainValue(cellRawValue(row.findCell(c)));
+        return v !== null && v !== undefined && v !== '';
+      });
+      if (!hasKept) continue;                      // 整列空白（保留的行都沒寫字）本來就不要，不用列出
+      var parts = [];
+      for (var c = 1; c <= colCount && parts.length < 3; c++) {
+        var pv = plainValue(cellRawValue(row.findCell(c)));
+        var t = pv === null || pv === undefined ? '' : normalizeText(pv instanceof Date ? pv.toISOString().slice(0, 10) : pv);
+        if (t !== '') parts.push(t.length > 40 ? t.slice(0, 40) + '…' : t);
+      }
+      out.push({ row: r, text: parts.join('｜') });
+    }
     return out;
   }
 
@@ -665,6 +696,7 @@
           var v = plainValue(cellRawValue(srcRow.findCell(c)));
           return v !== null && v !== undefined && v !== '';
         })) continue;
+        if (key === '' && opts.skipBlank && !(opts.keepBlankRows || {})[r]) continue;
       } else if (key === '' || !wanted[key]) continue;
       matched++;
       dstRow = ows.getRow(outRow++);
@@ -2535,7 +2567,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 35,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 36,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,
@@ -2551,6 +2583,7 @@
     inspect: inspect,
     extent: extent,
     filter: filter,
+    blankRows: blankRows,
     copySheet: copySheet,
     guessHeaderRow: guessHeaderRow,
     columnLabels: columnLabels,

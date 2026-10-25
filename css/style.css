@@ -225,6 +225,22 @@ select.in-month { text-align-last: center; }
 .mode-label input { width: 1.125rem; height: 1.125rem; margin: 0; accent-color: var(--teal); }
 .mode-body { padding-left: 1.625rem; }
 .mode-body.is-off { opacity: 0.45; }
+.skip-blank { margin-top: 0.5rem; }
+.check-label { display: inline-flex; align-items: center; gap: 0.5rem; font-weight: 400; cursor: pointer; }
+.check-label input, .blank-items input { width: 1.05rem; height: 1.05rem; accent-color: var(--teal); margin: 0; flex: none; }
+.blank-list:empty { display: none; }
+.blank-list { margin-top: 0.5rem; }
+.blank-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.875rem; font-size: 0.875rem; color: var(--ink-2); }
+.link-btn { background: none; border: 0; padding: 0; color: var(--teal-ink); font: inherit; font-size: 0.875rem; text-decoration: underline; cursor: pointer; }
+.blank-items { list-style: none; margin: 0.375rem 0 0; padding: 0.25rem 0; max-height: 15rem; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
+.blank-items li { font-size: 0.875rem; }
+.blank-items label { display: flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0.625rem; cursor: pointer; }
+.blank-items label:hover { background: var(--line-soft); }
+.blank-items .is-kept { color: var(--ink-2); }
+.blank-row { flex: none; min-width: 4.5rem; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.blank-text { overflow-wrap: anywhere; }
+.blank-more, .blank-none { padding: 0.25rem 0.625rem; font-size: 0.875rem; color: var(--ink-2); }
 .advanced { margin-top: 1rem; }
 .advanced summary { cursor: pointer; color: var(--teal-ink); font-size: 0.9375rem; width: fit-content; }
 .advanced[open] summary { margin-bottom: 0.75rem; }
