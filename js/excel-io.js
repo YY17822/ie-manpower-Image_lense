@@ -99,6 +99,24 @@
     return s;
   }
 
+  /* ---------- 模糊比對（第 1 步第三種選取方式）：儲存格文字含有任一個值就算符合，英文大小寫不分 ---------- */
+  function fuzzyText(v) {
+    v = plainValue(v);
+    if (v === null || v === undefined) return '';
+    if (v instanceof Date) v = v.toISOString().slice(0, 10);
+    return normalizeText(v).toLowerCase();
+  }
+  function fuzzyTerms(values) {
+    return (values || []).map(fuzzyText).filter(function (s) { return s !== ''; });
+  }
+  // 回傳儲存格文字含有的第一個值（已轉小寫）；都沒有回傳 ''
+  function fuzzyHit(v, terms) {
+    var s = fuzzyText(v);
+    if (s === '') return '';
+    for (var i = 0; i < terms.length; i++) if (s.indexOf(terms[i]) >= 0) return terms[i];
+    return '';
+  }
+
   function pad2(n) { return (n < 10 ? '0' : '') + n; }
 
   // 預覽畫面顯示用的文字
@@ -598,6 +616,49 @@
     return out;
   }
 
+  /*
+   * 模糊比對的結果，給畫面預覽用（和 filter() 同一套規則）
+   *   opts  { dataStartRow, selectorCol, lastRow, values, exclude }
+   *   回傳  { rows: [{ row, value: 那一格的文字, text: 這一列前幾格 }], hit: 含有任一值的列數, blank: 那一行空白的列數 }
+   *   rows 是會留下的列：exclude=false 時是含有任一值的列，exclude=true 時是都不含的列。那一行空白的列一律不留。
+   */
+  function fuzzyRows(ws, opts) {
+    var terms = fuzzyTerms(opts.values);
+    var colCount = extent(ws).colCount;
+    var out = { rows: [], hit: 0, blank: 0 };
+    for (var r = opts.dataStartRow; r <= opts.lastRow; r++) {
+      var row = ws.findRow(r);
+      if (!row) continue;
+      var raw = cellRawValue(row.findCell(opts.selectorCol));
+      if (fuzzyText(raw) === '') {
+        var any = false;
+        for (var c0 = 1; c0 <= colCount && !any; c0++) {
+          var v0 = plainValue(cellRawValue(row.findCell(c0)));
+          any = v0 !== null && v0 !== undefined && v0 !== '';
+        }
+        if (any) out.blank++;
+        continue;
+      }
+      var hit = fuzzyHit(raw, terms) !== '';
+      if (hit) out.hit++;
+      if (opts.exclude ? hit : !hit) continue;
+      var pv0 = plainValue(raw);
+      var parts = [];
+      for (var c = 1; c <= colCount && parts.length < 3; c++) {
+        if (c === opts.selectorCol) continue;
+        var pv = plainValue(cellRawValue(row.findCell(c)));
+        var s = pv === null || pv === undefined ? '' : normalizeText(pv instanceof Date ? pv.toISOString().slice(0, 10) : pv);
+        if (s !== '') parts.push(s.length > 30 ? s.slice(0, 30) + '…' : s);
+      }
+      out.rows.push({
+        row: r,
+        value: normalizeText(pv0 instanceof Date ? pv0.toISOString().slice(0, 10) : pv0),
+        text: parts.join('｜')
+      });
+    }
+    return out;
+  }
+
   function filter(ws, opts) {
     var ExcelJS = global.ExcelJS;
     var dataStartRow = opts.dataStartRow;
@@ -684,12 +745,19 @@
     var matched = 0;
     var total = 0;
     var outRow = dataStartRow;
+    var fzTerms = opts.fuzzy ? fuzzyTerms(opts.values) : null;   // 模糊比對（第三種選取方式）
     for (r = dataStartRow; r <= opts.lastRow; r++) {
       total++;
       srcRow = ws.findRow(r);
       if (!srcRow) continue;
       var key = matchKey(cellRawValue(srcRow.findCell(opts.selectorCol)));
-      if (opts.exclude) {
+      if (fzTerms) {
+        // 模糊比對：那一行空白的列一律不要；「等於」留含有任一值的列，「不等於」留都不含的列
+        var fzRaw = cellRawValue(srcRow.findCell(opts.selectorCol));
+        if (fuzzyText(fzRaw) === '') continue;
+        var fzHit = fuzzyHit(fzRaw, fzTerms) !== '';
+        if (opts.exclude ? fzHit : !fzHit) continue;
+      } else if (opts.exclude) {
         // 「不等於」：等於任一個值的列不要；選取的行是空白的列保留，但保留的行全都空白的列（空行）不要
         if (key !== '' && wanted[key]) continue;
         if (key === '' && !keepCols.some(function (c) {
@@ -2567,7 +2635,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 36,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 38,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,
@@ -2575,6 +2643,10 @@
     formatColumns: formatColumns,
     plainValue: plainValue,
     matchKey: matchKey,
+    fuzzyText: fuzzyText,
+    fuzzyTerms: fuzzyTerms,
+    fuzzyHit: fuzzyHit,
+    fuzzyRows: fuzzyRows,
     displayText: displayText,
     load: load,
     fixFontFlags: fixFontFlags,

@@ -89,6 +89,7 @@
    * o.onToggle    點行號時呼叫（可省略；有給的話行號會變成按鈕）
    * o.selectorCol / o.wanted  用來把不符合條件的列變淡（可省略）
    * o.exclude     true = 條件是「不等於」：等於 wanted 的列變淡
+   * o.fuzzyTerms  模糊比對的值（XIO.fuzzyTerms 的結果）；有給的話改用「含有」判斷，那一行空白的列也變淡
    */
   function renderSheet(container, ws, o) {
     container.textContent = '';
@@ -132,7 +133,11 @@
       var row = ws.findRow(r);
       var isHeader = r <= o.headerEnd;
       var out = false;
-      if (!isHeader && o.wanted) {
+      if (!isHeader && o.fuzzyTerms) {
+        var fv = valueOf(row && row.findCell(o.selectorCol));
+        var fh = XIO.fuzzyHit(fv, o.fuzzyTerms) !== '';
+        out = XIO.fuzzyText(fv) === '' || (o.exclude ? fh : !fh);
+      } else if (!isHeader && o.wanted) {
         var k = XIO.matchKey(valueOf(row && row.findCell(o.selectorCol)));
         out = o.exclude ? (k !== '' && !!o.wanted[k]) : !(k !== '' && o.wanted[k]);
       }

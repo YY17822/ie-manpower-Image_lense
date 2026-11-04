@@ -240,6 +240,19 @@ select.in-month { text-align-last: center; }
 .blank-items .is-kept { color: var(--ink-2); }
 .blank-row { flex: none; min-width: 4.5rem; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .blank-text { overflow-wrap: anywhere; }
+/* 第 1 步：模糊比對 */
+.fz-values { display: flex; flex-direction: column; gap: 0.375rem; }
+.fz-value { display: flex; align-items: center; gap: 0.625rem; }
+.fz-label { flex: none; min-width: 2.5rem; font-size: 0.875rem; color: var(--ink-2); }
+.fz-add { width: fit-content; }
+.fz-op { display: inline-flex; align-items: center; gap: 1.25rem; }
+.fz-preview:empty { display: none; }
+.fz-preview { margin-top: 0.25rem; }
+.fz-count { font-weight: 700; color: var(--ink); }
+.fz-item { display: flex; align-items: baseline; gap: 0.75rem; padding: 0.25rem 0.625rem; }
+.fz-val { flex: none; max-width: 45%; overflow-wrap: anywhere; font-weight: 700; }
+.fz-val mark { background: var(--mark); color: inherit; padding: 0 1px; border-radius: 2px; }
+.fz-ctx { color: var(--ink-2); }
 .blank-more, .blank-none { padding: 0.25rem 0.625rem; font-size: 0.875rem; color: var(--ink-2); }
 .advanced { margin-top: 1rem; }
 .advanced summary { cursor: pointer; color: var(--teal-ink); font-size: 0.9375rem; width: fit-content; }
