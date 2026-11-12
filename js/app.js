@@ -15,8 +15,7 @@
     { id: 'p003-import', title: '匯入 P003 標準工時', note: '加到同一個檔案' },
     { id: 'ct-lookup', title: '帶入標準工時 CT.', note: '用料號到 P003 查工時' },
     { id: 'demand-hours', title: '計算需求工時', note: '各月產量 × CT.' },
-    { id: 'summary', title: '需求工時匯總', note: '每月總工時、前三大料號' },
-    { id: 'rma', title: 'RMA 需求工時', note: '重工數量 × CT.' },
+    { id: 'summary', title: '需求工時匯總', note: '每月總工時、前三大料號、RMA' },
     { id: 'manpower', title: '匯入人力報表', note: '未來六個月的人力預計' },
     { id: 'report', title: '總表', note: '各月人力需求總覽' },
     { id: 'rma-manpower', title: 'RMA人力需求', note: '重工的人力需求' }
@@ -57,10 +56,9 @@
     'js/steps/step4-ct-lookup.js',
     'js/steps/step5-demand-hours.js',
     'js/steps/step6-summary.js',
-    'js/steps/step7-rma.js',
-    'js/steps/step8-manpower.js',
-    'js/steps/step9-report.js',
-    'js/steps/step10-rma-manpower.js'
+    'js/steps/step7-manpower.js',
+    'js/steps/step8-report.js',
+    'js/steps/step9-rma-manpower.js'
   ];
   // 各步驟用到的共用設定（畫面上「上次由誰修改」看這幾個）
   var STEP_SETTINGS = {
@@ -69,10 +67,9 @@
     'ct-lookup': ['step4'],
     'demand-hours': ['step5', 'step2-5'],
     'summary': ['step6'],
-    'rma': ['step7'],
-    'manpower': ['step8'],
-    'report': ['step9'],
-    'rma-manpower': ['step10']
+    'manpower': ['step7'],
+    'report': ['step8'],
+    'rma-manpower': ['step9']
   };
 
   var registry = {};

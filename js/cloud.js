@@ -5,12 +5,12 @@
  *   資料庫  Supabase 專案（js/config.js 的 SUPABASE_PUBLIC_URL / SUPABASE_PUBLISHABLE_KEY）
  *   位置    schema ie_manpower 的 settings 表，一筆 = (app, key) → value(jsonb)
  *           app 是這個 PWA 的專案代號（PROJECT_ID）
- *           key 是「步驟.輸入項目」，例如 step9.otHours（第 9 步的每日加班小時）
+ *           key 是「步驟.輸入項目」，例如 step8.otHours（第 8 步的每日加班小時）
  *           一個輸入項目一筆；6 個月這種一起看的值放在同一筆（value 是陣列）
  *           這樣兩個人同時改同一步的不同項目，也不會互相蓋掉
  *   登入    Supabase Auth 的 email + 密碼（帳號由管理者在 Supabase 後台建立，不開放註冊）
  *
- * 各步驟用 IEApp.settings.read(步驟) / write(步驟, 物件) 讀寫一整步的設定（例如 'step9'），
+ * 各步驟用 IEApp.settings.read(步驟) / write(步驟, 物件) 讀寫一整步的設定（例如 'step8'），
  * 這裡負責拆成一個個輸入項目上傳、下載時再組回去：
  *   讀    一律讀這台電腦的本機備份（localStorage），所以是同步的、離線也能用
  *   寫    先存本機，再在背景上傳 Supabase（連續打字時等停下來 1 秒才傳）
@@ -37,19 +37,33 @@
 
   var AUTH_KEY = IEApp.storeKey('_auth');         // supabase-js 存登入資訊的位置（只存這台電腦）
   var OLD_SESSION_KEY = IEApp.storeKey('_session'); // 版本 31 以前自己存的登入資訊，第一次打開時搬給 supabase-js
-  var SYNC_KEY = IEApp.storeKey('_sync');         // { dirty: { 'step9.otHours': true }, meta: { 'step9.otHours': { by, at } } }
+  var SYNC_KEY = IEApp.storeKey('_sync');         // { dirty: { 'step8.otHours': true }, meta: { 'step8.otHours': { by, at } } }
   var PUSH_DELAY = 1000;
   var TIMEOUT = 10000;
 
   // 舊的設定組名稱 → 現在的（組名統一用步驟編號）。本機備份和雲端的舊資料都照這張表搬
+  // （版本 39 拿掉了第 7 步 RMA：舊的 step6 → 不要了，manpower／report／rma-manpower 直接對到現在的 step7～step9）
   var LEGACY_GROUPS = {
-    totals: 'step2', columns: 'step2-5', step3: 'step4', step4: 'step5', step5: 'step6', step6: 'step7',
-    manpower: 'step8', report: 'step9', 'rma-manpower': 'step10'
+    totals: 'step2', columns: 'step2-5', step3: 'step4', step4: 'step5', step5: 'step6', step6: null,
+    manpower: 'step7', report: 'step8', 'rma-manpower': 'step9'
   };
   // 新格式裡改過名的組（版本 28 用過 shared，版本 29 起改成寫明是哪兩步共用）
   var RENAMED_GROUPS = { shared: 'step2-5' };
+  // 版本 39：拿掉第 7 步（手動輸入的 RMA 項目），第 8–10 步改成第 7–9 步。
+  // 雲端舊的項目不會刪（沒有刪除權限），下載時照這張表搬到新名稱（雲端還沒有新名稱的才搬），null = 不要了。
+  // 新舊名稱靠「項目名稱」分辨，所以之後 step7 不能用 items、startRow，step8 不能用 rows、lastFirstCol，
+  // step9 不能用下面列出的 step8 項目名稱，也不要再用 step10。
+  var MOVED_KEYS = {
+    'step7.items': null, 'step7.startRow': null,
+    'step8.rows': 'step7.rows', 'step8.lastFirstCol': 'step7.lastFirstCol',
+    'step9.otHours': 'step8.otHours', 'step9.otRate': 'step8.otRate', 'step9.offDirect': 'step8.offDirect',
+    'step9.offIndirect': 'step8.offIndirect', 'step9.yoLimit': 'step8.yoLimit', 'step9.workMinutes': 'step8.workMinutes',
+    'step9.effTop3': 'step8.effTop3', 'step9.effNonTop3': 'step8.effNonTop3', 'step9.attendance': 'step8.attendance',
+    'step10.version': 'step9.version'
+  };
+  function movedKey(key) { return Object.prototype.hasOwnProperty.call(MOVED_KEYS, key); }
   var LAYOUT_KEY = IEApp.storeKey('_layout');      // 本機備份的格式版本
-  var LAYOUT = 3;                                  // 2 = 組名用步驟編號、一個輸入項目一筆；3 = shared 改名 step2-5
+  var LAYOUT = 4;                                  // 2 = 組名用步驟編號、一個輸入項目一筆；3 = shared 改名 step2-5；4 = 拿掉第 7 步，step8～10 改成 step7～9
 
   var client = null;           // supabase-js 的連線
   var session = null;          // supabase-js 的登入資訊（session.user.email 是登入者）
@@ -249,7 +263,8 @@
         // 舊格式（一步一筆，key 沒有「.」）：轉成一個項目一筆，並標成要用新格式上傳；雲端已有新格式的項目以新格式為準
         var legacy = (rows || []).filter(function (r) { return !splitKey(r.key); });
         var renamed = (rows || []).filter(function (r) { var k = splitKey(r.key); return k && RENAMED_GROUPS[k.group]; });
-        var current = (rows || []).filter(function (r) { var k = splitKey(r.key); return k && !RENAMED_GROUPS[k.group]; });
+        var moved = (rows || []).filter(function (r) { return movedKey(r.key); });
+        var current = (rows || []).filter(function (r) { var k = splitKey(r.key); return k && !RENAMED_GROUPS[k.group] && !movedKey(r.key); });
         current.forEach(function (r) { remote[r.key] = true; });
         // 改過名的組（例如 shared.wipCol → step2-5.wipCol）：雲端還沒有新名稱的項目才用舊的，並用新名稱上傳
         renamed.forEach(function (r) {
@@ -260,7 +275,16 @@
           group(g)[k.field] = r.value;
           s.dirty[key] = true;
         });
+        // 版本 39 改名的項目（例如 step8.rows → step7.rows）：雲端還沒有新名稱的才用舊的，並用新名稱上傳
+        moved.forEach(function (r) {
+          var key = MOVED_KEYS[r.key];
+          if (!key || remote[key] || s.dirty[key]) return;
+          var k = splitKey(key);
+          group(k.group)[k.field] = r.value;
+          s.dirty[key] = true;
+        });
         legacy.forEach(function (r) {
+          if (LEGACY_GROUPS[r.key] === null) return;
           var g = LEGACY_GROUPS[r.key] || r.key;
           var v = r.value && typeof r.value === 'object' && !Array.isArray(r.value) ? r.value : {};
           Object.keys(v).forEach(function (field) {
@@ -521,6 +545,7 @@
   (function migrateLayout() {
     var layout = readJson(LAYOUT_KEY, 0);
     if (layout >= LAYOUT) return;
+    if (layout === 3) { moveSteps(); return; }
     if (layout === 2) {                            // 版本 28 → 29：只有 shared 改名
       Object.keys(RENAMED_GROUPS).forEach(function (name) {
         var raw = readLocal(IEApp.storeKey(name));
@@ -528,8 +553,7 @@
         if (raw !== null && readLocal(to) === null) writeLocal(to, raw);
         writeLocal(IEApp.storeKey(name), null);
       });
-      writeLocal(SYNC_KEY, null);
-      writeLocal(LAYOUT_KEY, String(LAYOUT));
+      moveSteps();
       return;
     }
     var old = {};
@@ -539,12 +563,24 @@
     });
     Object.keys(old).forEach(function (name) { writeLocal(IEApp.storeKey(name), null); });
     Object.keys(old).forEach(function (name) {
+      if (!LEGACY_GROUPS[name]) return;
       var to = IEApp.storeKey(LEGACY_GROUPS[name]);
       if (readLocal(to) === null) writeLocal(to, old[name]);
     });
     writeLocal(SYNC_KEY, null);                    // 舊格式的同步紀錄不再適用，下次同步重新整理
-    writeLocal(LAYOUT_KEY, String(LAYOUT));
+    writeLocal(LAYOUT_KEY, String(LAYOUT));        // LEGACY_GROUPS 已經直接對到版本 39 的名稱，不用再 moveSteps
   })();
+
+  // 版本 39：舊 step7（RMA 項目）不要了，step8 → step7、step9 → step8、step10 → step9（要照順序搬）
+  function moveSteps() {
+    writeLocal(IEApp.storeKey('step7'), null);
+    [['step8', 'step7'], ['step9', 'step8'], ['step10', 'step9']].forEach(function (pair) {
+      writeLocal(IEApp.storeKey(pair[1]), readLocal(IEApp.storeKey(pair[0])));
+      writeLocal(IEApp.storeKey(pair[0]), null);
+    });
+    writeLocal(SYNC_KEY, null);                    // 同步紀錄用的是舊名稱，下次同步重新整理（還沒上傳的會用新名稱補傳）
+    writeLocal(LAYOUT_KEY, String(LAYOUT));
+  }
 
   IEApp.settings = settings;
   IEApp.cloud = {

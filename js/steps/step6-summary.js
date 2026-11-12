@@ -7,6 +7,11 @@
  *     Others 總需求工時   =N76-N77                                           Production − Top 3
  *
  *   這三列連同左邊的文字標籤圍成一塊：外框粗線、裡面細格線，標籤置中。
+ *   只算一般 MPS 的列；第 1 步挑出的 RMA 另外在 RMA 區塊下面（和第 2 步的 RMA Total 同一列）加一列：
+ *
+ *     RMA總需求工時        =SUM(N83:N90)                                   RMA 各列的需求工時合計（沒有 RMA 列時填 0）
+ *
+ *   這一列也是外框粗線、裡面細格線，淺藍色底（#A2D2FF），總表的「需求工時（重工）」抓這一列。
  *
  *   每個月前三大的儲存格會標成淺橘色（數值是 0 的不算）。用的是 Excel 的「條件式格式」，
  *   所以之後手動補 CT.、數值變了，標示和這三列的數字都會跟著變。
@@ -32,7 +37,7 @@
   var TITLE = '需求工時';
   var SUFFIX = '_工時匯總';
   var TOP_N = 3;
-  var LABELS = { total: 'Production 總需求工時', top: 'Top 3 總需求工時', rest: 'Others 總需求工時' };
+  var LABELS = { total: 'Production 總需求工時', top: 'Top 3 總需求工時', rest: 'Others 總需求工時', rma: 'RMA總需求工時' };
 
   var S = {
     upload: null,         // 上傳的第 5 步檔案 { name, buffer }
@@ -112,8 +117,8 @@
     els.tops = h('div', { class: 'sheet-area' });
     els.exportBtn = h('button', { type: 'button', class: 'btn-primary', disabled: true, text: '匯出 Excel', onclick: onExport });
     els.nextBtn = h('button', {
-      type: 'button', class: 'btn-secondary', disabled: true, text: '下一步：RMA 需求工時',
-      onclick: function () { IEApp.go('rma'); }
+      type: 'button', class: 'btn-secondary', disabled: true, text: '下一步：匯入人力報表',
+      onclick: function () { IEApp.go('manpower'); }
     });
     els.exportNote = h('span', { class: 'export-note', 'aria-live': 'polite' });
 
@@ -248,7 +253,9 @@
     var hasError = plan.months.some(function (m) { return !!m.error; });
     setSummary('匯總會填在 ' + work.main.name + ' 工作表的第 ' + plan.totalRow + ' 到 ' + plan.restRow +
       ' 列（最後一列資料是第 ' + plan.lastRow + ' 列，空一列），' + firstL + ' 到 ' + lastL + ' 行，共 ' +
-      plan.width + ' 個月。', false, hasError);
+      plan.width + ' 個月。' + (plan.rma
+        ? ' RMA總需求工時填在第 ' + plan.rma.totalRow + ' 列（RMA ' + plan.rma.count + ' 列' + (plan.rma.count ? '' : '，合計是 0') + '）。'
+        : ' 這個檔案沒有 RMA 區塊（第 1 步舊版做的），不加 RMA總需求工時。'), false, hasError);
 
     if (hasError) {
       var bad = plan.months.filter(function (m) { return !!m.error; })
@@ -272,6 +279,7 @@
       totalRow: plan.totalRow,
       topRow: plan.topRow,
       restRow: plan.restRow,
+      rmaRow: plan.rma ? plan.rma.totalRow : 0,
       build: function () { return buildWorkbook(src, opts); }
     };
     els.nextBtn.disabled = false;
@@ -307,6 +315,15 @@
       });
       body.appendChild(tr);
     });
+    if (plan.rma) {
+      var rtr = h('tr', null,
+        h('th', { class: 'rowhead', scope: 'row', text: String(plan.rma.totalRow) }),
+        h('td', { text: LABELS.rma }));
+      plan.rma.months.forEach(function (m) {
+        rtr.appendChild(h('td', { class: 'is-num', text: m.error ? m.error : showNumber(m.total) }));
+      });
+      body.appendChild(rtr);
+    }
 
     els.result.appendChild(h('p', { class: 'sheet-caption', text: '匯總結果。' }));
     els.result.appendChild(h('div', { class: 'sheet-scroll', tabindex: '0', role: 'group', 'aria-label': '匯總結果' },

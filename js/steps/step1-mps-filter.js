@@ -11,7 +11,11 @@
  *           下面逐列列出會留下的列，方便檢查
  *      符合的列才留下（從第 5 列開始比對）
  *   3. 輸入要保留哪些行
- *   4. 匯出新的 Excel，第 1–4 列表頭（含合併儲存格）原樣保留
+ *   4. 挑出 RMA：從保留的行選一行，模糊比對（含有）或等於任一個值（預設三個輸入框，可再加）。
+ *      符合的列逐列列出、預設打勾；取消勾選的列留在一般 MPS（不記住，因為每個月列號不同）。
+ *      RMA 的列移到一般 MPS 最後一列之後第 8 列起：空一列、三列留給第 2 步的匯總（Total／Top 3／Non-Top 3）、
+ *      再空三列，然後是一列「RMA」標題（跨保留的行合併置中），下面是 RMA 的列。沒有 RMA 時一樣留標題。
+ *   5. 匯出新的 Excel，第 1–4 列表頭（含合併儲存格）原樣保留
  *
  * 做完之後把結果放在 IEApp.state.mpsFiltered，第 2 步直接拿來用。
  *
@@ -35,14 +39,16 @@
   // mode 'fz' = 指定某一行模糊比對：zCol 哪一行、zOp（'eq' 含有的列選取／'ne' 含有的列排除）、zValues 各輸入框的值（陣列）
   var DEFAULTS = {
     values: '', cols: '', startRow: 5, selCol: 'A', mode: 'a', fCol: '', fOp: 'eq', fValues: '', fSkipBlank: true,
-    zCol: '', zOp: 'eq', zValues: ['', '', '']
+    zCol: '', zOp: 'eq', zValues: ['', '', ''],
+    rmaCol: '', rmaOp: 'fz', rmaValues: ['', '', '']    // 挑出 RMA：哪一行、'fz' 模糊比對／'eq' 等於、各輸入框的值
   };
   var MAX_BLANK_LIST = 200;  // 空白列清單最多列幾列
   var MAX_FZ_LIST = 300;     // 模糊比對預覽最多列幾列
 
   // 這一步的狀態（切到別的步驟再回來時還在）
   // keepBlank：空白列清單裡使用者取消勾選（要保留）的列號 { 52: true }；換檔案、換行、換起始列時清空
-  var S = { fileName: '', workbook: null, ws: null, info: null, infoKey: '', result: null, keepBlank: {}, blankKey: '' };
+  // rmaOff：挑出 RMA 的清單裡取消勾選（留在一般 MPS）的列號 { 52: true }；換檔案、換工作表、換起始列時清空
+  var S = { fileName: '', workbook: null, ws: null, info: null, infoKey: '', result: null, keepBlank: {}, blankKey: '', rmaOff: {}, rmaKey: '' };
   var settings = loadSettings();
   var els = {};
   var timer = null;
@@ -54,6 +60,8 @@
     var out = {};
     Object.keys(DEFAULTS).forEach(function (k) { out[k] = s[k] === undefined ? DEFAULTS[k] : s[k]; });
     out.zValues = Array.isArray(out.zValues) && out.zValues.length ? out.zValues.map(function (v) { return String(v == null ? '' : v); }) : ['', '', ''];
+    out.rmaValues = Array.isArray(out.rmaValues) && out.rmaValues.length ? out.rmaValues.map(function (v) { return String(v == null ? '' : v); }) : ['', '', ''];
+    out.rmaOp = out.rmaOp === 'eq' ? 'eq' : 'fz';
     return out;
   }
   function saveSettings() {
@@ -178,6 +186,17 @@
       id: 'f-selcol', type: 'text', class: 'in in-tiny', autocomplete: 'off', value: String(settings.selCol)
     });
 
+    // 挑出 RMA
+    els.rmaCol = h('select', { id: 'f-rmacol' });
+    els.rmaOp = h('select', { id: 'f-rmaop', 'aria-label': '比對方式' },
+      h('option', { value: 'fz', text: '模糊比對（含有）' }), h('option', { value: 'eq', text: '等於' }));
+    els.rmaOp.value = settings.rmaOp;
+    els.rmaBox = h('div', { class: 'fz-values' });
+    els.rmaAdd = h('button', { type: 'button', class: 'link-btn fz-add', text: '＋ 再加一個輸入框', onclick: addRmaInput });
+    els.rmaChips = h('div', { class: 'chips' });
+    els.rmaList = h('div', { class: 'fz-preview', 'aria-live': 'polite' });
+    buildRmaInputs();
+
     els.summary = h('p', { class: 'summary', 'aria-live': 'polite' });
     els.outPreview = h('div', { class: 'sheet-area' });
     els.exportBtn = h('button', { type: 'button', class: 'btn-primary', disabled: true, text: '匯出 Excel', onclick: onExport });
@@ -189,7 +208,7 @@
 
     panel.appendChild(h('div', { class: 'step-head' },
       h('h1', { text: '篩選 MPS 報表' }),
-      h('p', { text: '依選取條件留下要的列（A 行等於指定數值、指定某一行等於／不等於某些值，或指定某一行模糊比對），以及你要的行，匯出成新的 Excel。表頭（第 1–4 列）會原樣保留。' })));
+      h('p', { text: '依選取條件留下要的列（A 行等於指定數值、指定某一行等於／不等於某些值，或指定某一行模糊比對），以及你要的行，再挑出哪些列是 RMA，匯出成新的 Excel。表頭（第 1–4 列）會原樣保留。' })));
 
     panel.appendChild(h('ol', { class: 'tasks' },
       h('li', { class: 'task' },
@@ -223,6 +242,12 @@
           h('div', { class: 'field-row' },
             h('label', { for: 'f-selcol', text: '選取條件在' }), els.selCol, h('span', { text: '行' })))),
       h('li', { class: 'task' },
+        h('h2', { text: '挑出 RMA' }),
+        h('p', { class: 'hint', text: '從保留的行裡挑出哪些列是 RMA。這些列會移到一般 MPS 的 Total 匯總下面（再空三列），上面加一列「RMA」標題；CT.、需求工時和一般 MPS 一樣算。這個月沒有 RMA 時，輸入框留空白就好（一樣會留一個空的 RMA 區塊，合計是 0）。' }),
+        h('div', { class: 'field-row' },
+          h('label', { for: 'f-rmacol', text: '看哪一行' }), els.rmaCol, els.rmaOp, h('span', { text: '下面任一個值' })),
+        els.rmaBox, h('div', null, els.rmaAdd), els.rmaChips, els.rmaList),
+      h('li', { class: 'task' },
         h('h2', { text: '匯出' }),
         els.summary, els.outPreview,
         h('div', { class: 'actions' }, els.exportBtn, els.nextBtn, els.exportNote))));
@@ -246,6 +271,8 @@
     // 點輸入框時自動切到那一種方式
     els.values.addEventListener('focus', function () { setMode('a'); });
     [els.fCol, els.fOp, els.fValues].forEach(function (el) { el.addEventListener('focus', function () { setMode('col'); }); });
+    els.rmaCol.addEventListener('change', function () { settings.rmaCol = els.rmaCol.value; recompute(); });
+    els.rmaOp.addEventListener('change', function () { settings.rmaOp = els.rmaOp.value === 'eq' ? 'eq' : 'fz'; recompute(); });
     bindInput(els.cols, 'cols');
     bindInput(els.startRow, 'startRow');
     bindInput(els.selCol, 'selCol');
@@ -257,6 +284,152 @@
   function setMode(mode) {
     if (settings.mode === mode) return;
     settings.mode = mode;
+    recompute();
+  }
+
+  /* ---------- 挑出 RMA 的輸入框（預設三個，可以再加、可以刪） ---------- */
+  function buildRmaInputs(focusIndex) {
+    els.rmaBox.textContent = '';
+    var list = settings.rmaValues;
+    list.forEach(function (val, i) {
+      var id = 'f-rmaval-' + i;
+      var input = h('input', {
+        id: id, type: 'text', class: 'in in-short', autocomplete: 'off', spellcheck: 'false',
+        placeholder: i === 0 ? '例如 RMA' : '', value: val
+      });
+      input.addEventListener('input', function () {
+        settings.rmaValues[i] = input.value;
+        clearTimeout(timer);
+        timer = setTimeout(recompute, 200);
+      });
+      var row = h('div', { class: 'fz-value' },
+        h('label', { class: 'fz-label', for: id, text: '值 ' + (i + 1) }), input);
+      if (list.length > 1) {
+        row.appendChild(h('button', {
+          type: 'button', class: 'link-btn', text: '刪除', 'aria-label': '刪除 RMA 的值 ' + (i + 1),
+          onclick: function () { removeRmaInput(i); }
+        }));
+      }
+      els.rmaBox.appendChild(row);
+    });
+    if (focusIndex !== undefined) {
+      var el = document.getElementById('f-rmaval-' + focusIndex);
+      if (el) el.focus();
+    }
+  }
+  function addRmaInput() {
+    settings.rmaValues.push('');
+    buildRmaInputs(settings.rmaValues.length - 1);
+    recompute();
+  }
+  function removeRmaInput(i) {
+    settings.rmaValues.splice(i, 1);
+    if (!settings.rmaValues.length) settings.rmaValues.push('');
+    buildRmaInputs(Math.min(i, settings.rmaValues.length - 1));
+    recompute();
+  }
+  function rmaValues() {
+    return settings.rmaValues.map(function (v) { return XIO.normalizeText(v); }).filter(function (v) { return v !== ''; });
+  }
+  // 「看哪一行」的選單：只列保留的行（行號＋表頭文字）
+  function fillRmaCols(cols) {
+    var labels = S.ws ? XIO.columnLabels(S.ws, startRow() > 2 ? 2 : 1, Math.max(startRow() - 1, 1), Math.max.apply(null, cols.concat([1]))) : [];
+    var chosen = XIO.normalizeText(settings.rmaCol).toUpperCase();
+    els.rmaCol.textContent = '';
+    els.rmaCol.appendChild(h('option', { value: '', text: '請選擇' }));
+    cols.forEach(function (c) {
+      var letter = XIO.numToCol(c);
+      var label = labels[c] ? letter + '　' + labels[c] : letter;
+      if (label.length > 42) label = label.slice(0, 41) + '…';
+      els.rmaCol.appendChild(h('option', { value: letter, text: label }));
+    });
+    var ok = cols.some(function (c) { return XIO.numToCol(c) === chosen; });
+    els.rmaCol.value = ok ? chosen : '';
+    return ok ? XIO.colToNum(chosen) : 0;
+  }
+  function rmaMessage(text) {
+    els.rmaChips.textContent = '';
+    els.rmaList.textContent = '';
+    els.rmaList.appendChild(h('p', { class: 'blank-none', text: text }));
+  }
+
+  /*
+   * 挑出 RMA 的值按鈕和逐列清單（打勾＝RMA，取消勾選＝留在一般 MPS）
+   *   kept   符合選取條件的列號；col 看哪一行；picks 符合的列
+   */
+  function renderRma(kept, col, picks, values) {
+    els.rmaChips.textContent = '';
+    els.rmaList.textContent = '';
+    var colName = XIO.numToCol(col);
+    var seen = XIO.columnValues(S.ws, kept, col);
+    if (seen.length) {
+      var have = {};
+      values.forEach(function (v) { have[XIO.fuzzyText(v)] = true; });
+      els.rmaChips.appendChild(h('span', { class: 'chips-label', text: '篩選出來的列裡 ' + colName + ' 行的值' }));
+      seen.slice(0, MAX_CHIPS).forEach(function (v) {
+        els.rmaChips.appendChild(h('button', {
+          type: 'button', class: 'chip', 'aria-pressed': have[v.key] ? 'true' : 'false',
+          onclick: function () { toggleRmaValue(v); }
+        }, h('span', { class: 'chip-value', text: v.label }),
+           h('span', { class: 'chip-count', text: v.count.toLocaleString('en-US') + ' 列' })));
+      });
+      if (seen.length > MAX_CHIPS) els.rmaChips.appendChild(h('span', { class: 'chips-more', text: '另有 ' + (seen.length - MAX_CHIPS) + ' 種' }));
+    }
+    if (!values.length) {
+      els.rmaList.appendChild(h('p', { class: 'blank-none', text: '沒有輸入值：這個月不分 RMA，匯出時留一個空的 RMA 區塊。' }));
+      return;
+    }
+    if (!picks.length) {
+      els.rmaList.appendChild(h('p', { class: 'blank-none', text: colName + ' 行沒有符合的列。RMA 區塊會是空的（RMA Total、RMA總需求工時都是 0）。' }));
+      return;
+    }
+    var off = picks.filter(function (p) { return S.rmaOff[p.row]; }).length;
+    els.rmaList.appendChild(h('div', { class: 'blank-head' },
+      h('span', { class: 'fz-count', text: 'RMA：' + (picks.length - off).toLocaleString('en-US') + ' 列' }),
+      h('span', { text: off ? '（取消勾選 ' + off + ' 列，留在一般 MPS）' : '（打勾的會移到 RMA 區塊）' }),
+      h('button', { type: 'button', class: 'link-btn', text: '全部勾選', onclick: function () { S.rmaOff = {}; recompute(); } }),
+      h('button', { type: 'button', class: 'link-btn', text: '全部取消', onclick: function () {
+        picks.forEach(function (p) { S.rmaOff[p.row] = true; }); recompute();
+      } })));
+    var terms = settings.rmaOp === 'eq' ? [] : XIO.fuzzyTerms(values);
+    var list = h('ul', { class: 'blank-items' });
+    picks.slice(0, MAX_FZ_LIST).forEach(function (p) {
+      var id = 'f-rma-' + p.row;
+      var box = h('input', { type: 'checkbox', id: id });
+      box.checked = !S.rmaOff[p.row];
+      box.addEventListener('change', function () {
+        if (box.checked) delete S.rmaOff[p.row]; else S.rmaOff[p.row] = true;
+        var scroller = els.rmaList.querySelector('.blank-items');
+        var top = scroller ? scroller.scrollTop : 0;
+        recompute();
+        scroller = els.rmaList.querySelector('.blank-items');
+        if (scroller) scroller.scrollTop = top;
+        var again = document.getElementById(id);
+        if (again) again.focus({ preventScroll: true });
+      });
+      list.appendChild(h('li', { class: box.checked ? '' : 'is-kept' },
+        h('label', { for: id }, box,
+          h('span', { class: 'blank-row', text: '第 ' + p.row + ' 列' }),
+          markText(p.value, terms),
+          h('span', { class: 'blank-text fz-ctx', text: p.text }))));
+    });
+    if (picks.length > MAX_FZ_LIST) {
+      list.appendChild(h('li', { class: 'blank-more', text: '另有 ' + (picks.length - MAX_FZ_LIST) + ' 列沒有列出（一樣會移到 RMA）' }));
+    }
+    els.rmaList.appendChild(list);
+  }
+  // 點值的按鈕：已經在輸入框裡就清掉，不在就填進第一個空的輸入框（沒有空的就加一個）
+  function toggleRmaValue(v) {
+    var vs = settings.rmaValues;
+    var at = -1, empty = -1;
+    vs.forEach(function (x, i) {
+      if (at < 0 && XIO.normalizeText(x) !== '' && XIO.fuzzyText(x) === v.key) at = i;
+      if (empty < 0 && XIO.normalizeText(x) === '') empty = i;
+    });
+    if (at >= 0) vs[at] = '';
+    else if (empty >= 0) vs[empty] = v.label;
+    else vs.push(v.label);
+    buildRmaInputs();
     recompute();
   }
 
@@ -419,6 +592,8 @@
     els.zOpExc.checked = settings.zOp === 'ne';
     [els.rowFz, els.zBox, els.zAddRow].forEach(function (el) { el.classList.toggle('is-off', !byFuzzy()); });
     els.zPreview.textContent = '';
+    fillRmaCols(XIO.parseColumns(settings.cols).cols);
+    rmaMessage('先完成上面的選取條件和要保留的行。');
 
     if (!S.ws) {
       els.chips.textContent = '';
@@ -500,8 +675,24 @@
     }
     var opts = {
       dataStartRow: sr, selectorCol: sc, values: values, keepCols: parsed.cols, lastRow: info.lastRow,
-      exclude: exclude(), skipBlank: skipBlank(), keepBlankRows: keepBlank, fuzzy: byFuzzy()
+      exclude: exclude(), skipBlank: skipBlank(), keepBlankRows: keepBlank, fuzzy: byFuzzy(),
+      rmaBlock: true, rmaRows: {}
     };
+
+    // 挑出 RMA：在符合選取條件的列裡找，打勾的列放到 RMA 區塊
+    var rkey = S.fileName + '|' + (ws.name || '') + '|' + sr;
+    if (S.rmaKey !== rkey) { S.rmaKey = rkey; S.rmaOff = {}; }
+    var rmaCol = fillRmaCols(parsed.cols);
+    var kept = XIO.filterRows(ws, opts);
+    if (!rmaCol) {
+      rmaMessage(XIO.normalizeText(settings.rmaCol) ? settings.rmaCol + ' 行不在保留的行裡，請重新選擇。沒有選的話，匯出時留一個空的 RMA 區塊。'
+        : '選擇要看哪一行（例如料號或說明）。沒有選的話，匯出時留一個空的 RMA 區塊。');
+    } else {
+      var rv = rmaValues();
+      var picks = XIO.pickRows(ws, kept, rmaCol, settings.rmaOp, rv, parsed.cols);
+      picks.forEach(function (p) { if (!S.rmaOff[p.row]) opts.rmaRows[p.row] = true; });
+      renderRma(kept, rmaCol, picks, rv);
+    }
     var result = XIO.filter(ws, opts);
     var skipped = blanks.length - Object.keys(keepBlank).length;
 
@@ -517,6 +708,10 @@
       result.totalRows.toLocaleString('en-US') + ' 列資料），保留 ' + parsed.cols.length + ' 行。';
     if (skipBlank() && blanks.length) {
       text += ' 另外排除 ' + colName + ' 行空白的 ' + skipped + ' 列' + (skipped < blanks.length ? '（保留 ' + (blanks.length - skipped) + ' 列）' : '') + '。';
+    }
+    if (result.rma) {
+      text += ' 其中 RMA ' + result.rma.rows.toLocaleString('en-US') + ' 列，放在匯出檔第 ' + result.rma.titleRow + ' 列的「RMA」標題下面' +
+        '（一般 MPS 到第 ' + (result.rma.titleRow - XIO.RMA_GAP) + ' 列）。';
     }
     var beyond = parsed.cols.filter(function (c) { return c > info.colCount; });
     if (beyond.length) text += ' 注意：' + XIO.formatColumns(beyond) + ' 行在報表裡沒有資料。';
@@ -538,6 +733,8 @@
       outName: outputName(),
       sheetName: result.worksheet.name,
       matchedRows: result.matchedRows,
+      mainRows: result.mainRows,
+      rmaRows: result.rma ? result.rma.rows : 0,
       headerEnd: result.headerEnd,
       build: function () { return XIO.filter(ws, opts).workbook; }
     };

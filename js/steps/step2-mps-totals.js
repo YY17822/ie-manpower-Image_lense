@@ -1,6 +1,8 @@
 /*
  * 第 2 步：匯總
  *   算出 MPS 各月的預計總產量（Total）、前三大料號的合計（Top 3）、其餘的合計（Non-Top 3）。
+ *   只算一般 MPS；第 1 步挑出的 RMA 另外在 RMA 區塊下面（最後一列之後空一列）加一列「RMA Total」，
+ *   當月一樣加 WIP（=SUM(D83:D90)+SUM(E83:E90)），不分前三大。沒有 RMA 列時填 0。
  *   表格放在篩選後的 MPS 資料下面：最後一列資料之後空一列開始，共三列，對齊各月的行；
  *   文字標籤在第一個月左邊那一行。每格都是公式。
  *
@@ -35,7 +37,7 @@
   var STORE_KEY = 'step2';
   var STEP1_KEY = 'step1';
   var REF_SHEET = 'P003';
-  var LABELS = { total: 'Total', top: 'Top 3', rest: 'Non-Top 3' };
+  var LABELS = { total: 'Total', top: 'Top 3', rest: 'Non-Top 3', rma: 'RMA Total' };
   var SUFFIX = '_匯總';
   var TOP_N = 3;
   var KEY_COL = 1;              // 料號在第 1 行
@@ -376,7 +378,7 @@
     var hasError = plan.months.some(function (m) { return !!m.error; });
     setSummary('匯總會填在 ' + work.main.name + ' 工作表的第 ' + plan.totalRow + ' 到 ' + plan.restRow +
       ' 列（最後一列資料是第 ' + plan.lastRow + ' 列，空一列），' + firstL + ' 到 ' + lastL + ' 行，共 ' +
-      monthCols.length + ' 個月；文字標籤在 ' + XIO.numToCol(plan.labelCol) + ' 行。', false, hasError);
+      monthCols.length + ' 個月；文字標籤在 ' + XIO.numToCol(plan.labelCol) + ' 行。' + rmaNote(plan), false, hasError);
 
     if (hasError) {
       var bad = plan.months.filter(function (m) { return !!m.error; }).map(function (m) { return XIO.numToCol(m.col); });
@@ -405,6 +407,12 @@
       monthCols: monthCols,
       build: function () { return buildWorkbook(src, opts); }
     };
+  }
+
+  function rmaNote(plan) {
+    if (!plan.rma) return ' 這個檔案沒有 RMA 區塊（第 1 步舊版做的），不加 RMA Total。';
+    return ' RMA Total 填在第 ' + plan.rma.totalRow + ' 列（RMA ' + plan.rma.count + ' 列' +
+      (plan.rma.count ? '，第 ' + plan.rma.firstRow + ' 到 ' + plan.rma.lastRow + ' 列' : '，合計是 0') + '）。';
   }
 
   function setSummary(text, isError, isWarn) {
@@ -439,6 +447,15 @@
       });
       body.appendChild(tr);
     });
+    if (plan.rma) {
+      var rtr = h('tr', null,
+        h('th', { class: 'rowhead', scope: 'row', text: String(plan.rma.totalRow) }),
+        h('td', { text: LABELS.rma }));
+      plan.rma.months.forEach(function (m) {
+        rtr.appendChild(h('td', { class: 'is-num is-total', text: m.error ? m.error : showNumber(m.total) }));
+      });
+      body.appendChild(rtr);
+    }
 
     els.result.appendChild(h('p', { class: 'sheet-caption', text: '匯總結果。' }));
     els.result.appendChild(h('div', { class: 'sheet-scroll', tabindex: '0', role: 'group', 'aria-label': '匯總結果' },
