@@ -1,6 +1,7 @@
 /*
  * 第 2 步：匯總
- *   算出 MPS 各月的預計總產量（Total）、前三大料號的合計（Top 3）、其餘的合計（Non-Top 3）。
+ *   算出 MPS 各月的預計總產量（Total）。前三大料號的合計（Top 3）、其餘的合計（Non-Top 3）兩列先留空白：
+ *   前三大要照需求工時（第 6 步）挑料號，第 6 步做的時候才回頭填公式、標淺橘色（excel-io.js 的 planMpsTop）。
  *   只算一般 MPS；第 1 步挑出的 RMA 另外在 RMA 區塊下面（最後一列之後空一列）加一列「RMA Total」，
  *   當月一樣加 WIP（=SUM(D83:D90)+SUM(E83:E90)），不分前三大。沒有 RMA 列時填 0。
  *   表格放在篩選後的 MPS 資料下面：最後一列資料之後空一列開始，共三列，對齊各月的行；
@@ -391,7 +392,6 @@
     }
 
     renderResult(plan, labels, wipCol);
-    renderTops(plan, labels);
     els.exportBtn.disabled = false;
     els.nextBtn.disabled = false;
 
@@ -443,7 +443,8 @@
         h('td', { text: LABELS[pair[0]] }));
       plan.months.forEach(function (m) {
         var cls = 'is-num' + (pair[0] === 'total' ? ' is-total' : pair[0] === 'top' ? ' is-top' : '');
-        tr.appendChild(h('td', { class: cls, text: m.error ? m.error : showNumber(m[pair[0]]) }));
+        var later = pair[0] !== 'total';                         // Top 3／Non-Top 3：第 6 步才填
+        tr.appendChild(h('td', { class: later ? 'is-num is-later' : cls, text: later ? '第 6 步填' : m.error ? m.error : showNumber(m[pair[0]]) }));
       });
       body.appendChild(tr);
     });
@@ -463,23 +464,14 @@
 
     var W = XIO.numToCol(wipCol);
     var a = plan.firstRow, b = plan.lastRow;
-    var n = Math.min(TOP_N, b - a + 1);
-    var ks = [];
-    for (var k = 1; k <= n; k++) ks.push(k);
     var L = XIO.numToCol(plan.months[0].col);
-    var text = '當月（' + L + ' 行）的公式：' +
-      L + plan.totalRow + ' =SUM(' + W + a + ':' + W + b + ')+SUM(' + L + a + ':' + L + b + ')　' +
-      L + plan.topRow + ' =SUMPRODUCT(LARGE(' + W + a + ':' + W + b + '+' + L + a + ':' + L + b + ',{' + ks.join(',') + '}))　' +
-      L + plan.restRow + ' =' + L + plan.totalRow + '-' + L + plan.topRow;
-    els.result.appendChild(h('p', { class: 'hint', text: text }));
+    var text = 'Total 的公式：當月（' + L + ' 行）' + L + plan.totalRow + ' =SUM(' + W + a + ':' + W + b + ')+SUM(' + L + a + ':' + L + b + ')';
     if (plan.months.length > 1) {
       var M = XIO.numToCol(plan.months[1].col);
-      var range = M + a + ':' + M + b;
-      els.result.appendChild(h('p', { class: 'hint', text: '其他月份（以 ' + M + ' 行為例）：' +
-        M + plan.totalRow + ' =SUM(' + range + ')　' +
-        M + plan.topRow + ' =' + ks.map(function (x) { return 'LARGE(' + range + ',' + x + ')'; }).join('+') + '　' +
-        M + plan.restRow + ' =' + M + plan.totalRow + '-' + M + plan.topRow }));
+      text += '，其他月份（以 ' + M + ' 行為例）' + M + plan.totalRow + ' =SUM(' + M + a + ':' + M + b + ')';
     }
+    els.result.appendChild(h('p', { class: 'hint', text: text + '。' }));
+    els.result.appendChild(h('p', { class: 'hint', text: 'Top 3／Non-Top 3 照各月需求工時的前三大料號算（每個月各自挑），要等第 6 步算出需求工時後才會填入公式，同樣的料號在數量那幾行也會標成淺橘色。這一步匯出的檔案這兩列是空白的。' }));
   }
 
   // 每個月前三大是哪幾個料號（這些儲存格會標成淺橘色）

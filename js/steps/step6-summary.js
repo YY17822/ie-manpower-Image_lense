@@ -7,6 +7,10 @@
  *     Others 總需求工時   =N76-N77                                           Production − Top 3
  *
  *   這三列連同左邊的文字標籤圍成一塊：外框粗線、裡面細格線，標籤置中。
+ *
+ *   同時回頭填第 2 步的 Top 3／Non-Top 3（數量）：照這裡各月需求工時的前三大料號，把那幾個料號的數量加起來
+ *   （當月加 WIP），例如 E77 =SUMPRODUCT((N5:N74>0)*(N5:N74>=LARGE(N5:N74,3))*(D5:D74+E5:E74))，
+ *   同樣的料號在數量那幾行也標淺橘色。這樣第 2 步和這一步的 Top 3 一定是同一組料號。
  *   只算一般 MPS 的列；第 1 步挑出的 RMA 另外在 RMA 區塊下面（和第 2 步的 RMA Total 同一列）加一列：
  *
  *     RMA總需求工時        =SUM(N83:N90)                                   RMA 各列的需求工時合計（沒有 RMA 列時填 0）
@@ -266,6 +270,19 @@
 
     renderResult(plan);
     renderTops(plan);
+    var mt = plan.mpsTop;
+    if (mt && mt.found) {
+      var m0 = mt.months[0];
+      els.notes.appendChild(h('li', null,
+        '第 2 步的 Top 3／Non-Top 3（數量）會照這裡各月需求工時的前三大料號填入：第 ' + mt.topRow + '、' + mt.restRow + ' 列，' +
+        XIO.numToCol(m0.qtyCol) + ' 到 ' + XIO.numToCol(mt.months[mt.months.length - 1].qtyCol) + ' 行；同樣的料號在數量那幾行也會標淺橘色。' +
+        '各月 Top 3 數量：' + mt.months.map(function (m) { return m.error ? m.error : showNumber(m.top); }).join('、') + '。' +
+        '當月的公式：' + XIO.numToCol(m0.qtyCol) + mt.topRow + ' =' + m0.formula));
+    } else if (mt) {
+      els.notes.appendChild(h('li', { class: 'is-warn' }, mt.reason === 'step2'
+        ? '這個檔案沒有第 2 步的匯總（Total 那一列），第 2 步的 Top 3／Non-Top 3 數量不填。'
+        : '需求工時不是第 5 步填的公式，看不出各月的數量在哪一行，第 2 步的 Top 3／Non-Top 3 數量不填。'));
+    }
     els.exportBtn.disabled = false;
 
     // 給下一步用

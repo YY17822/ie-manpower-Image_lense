@@ -34,7 +34,7 @@
  *   算出來的列：
  *     需求人力 On line   =D5/(D8+D9)/(D10+D11)/D12/D14+D6/(D8+D9)/(D10+D11)/D13/D14+D7/D8/D10/D13/D14
  *     需求人力 小計      =D15+D16（On line + Off line_直接，不含 Off line_間接，備註有寫）
- *   從「人力」工作表抓的列（第 7 步確認的列和當月那一行，例如 ='人力'!D4）：
+ *   從總表 O 行起的人力報表抓的列（第 7 步確認的列和當月那一行，例如 ='總表'!R4）：
  *     現有人力 On line、Off line_直接、Off line_間接
  *     現有人力 小計(on+off)  =D19+D20（不含 Off line_間接，備註有寫）
  *   上傳第 7 步的檔案時，用第 7 步上次確認、記在瀏覽器裡的位置。
@@ -68,11 +68,12 @@
   var STORE_KEY = 'step8';
   var MONTHS = XIO.REPORT.months;
   var DEFAULT_WORK_MINUTES = '480';
-  // 需求人力 Off line 的兩組人數（人員種類在 excel-io.js 的 REPORT_OFFLINE）
+  // 需求人力 Off line_間接：固定的人員種類（excel-io.js 的 REPORT_OFFLINE），後面有一個備註欄
   var OFFLINE = [
-    { key: 'offDirect', label: '需求人力 Off line_直接' },
     { key: 'offIndirect', label: '需求人力 Off line_間接' }
   ];
+  // 需求人力 Off line_直接：名稱＋人數，可以新增、刪除（預設是 REPORT_OFFLINE.offDirect 那 5 種）
+  var DIRECT = { key: 'offDirect', label: '需求人力 Off line_直接' };
 
   var S = {
     upload: null,         // 上傳的第 7 步檔案 { name, buffer, sheets }
@@ -106,6 +107,16 @@
       var saved = Array.isArray(s[g.key]) ? s[g.key] : [];
       out[g.key] = XIO.REPORT_OFFLINE[g.key].map(function (c, i) { return saved[i] === undefined || saved[i] === null ? '' : String(saved[i]); });
     });
+    out.offIndirectNote = s.offIndirectNote === undefined || s.offIndirectNote === null ? '' : String(s.offIndirectNote);
+    // Off line_直接：新版存 offDirectItems [{ name, count }]；舊版只存人數 offDirect [人數]，名稱用預設的 5 種
+    var oldCounts = Array.isArray(s.offDirect) ? s.offDirect : [];
+    var items = Array.isArray(s.offDirectItems) ? s.offDirectItems
+      : XIO.REPORT_OFFLINE.offDirect.map(function (c, i) { return { name: c, count: oldCounts[i] }; });
+    out.offDirectItems = items.map(function (it) {
+      it = it && typeof it === 'object' ? it : {};
+      return { name: it.name === undefined || it.name === null ? '' : String(it.name), count: it.count === undefined || it.count === null ? '' : String(it.count) };
+    });
+    if (!out.offDirectItems.length) out.offDirectItems.push({ name: '', count: '' });
     REMEMBERED.forEach(function (row) {
       var saved = Array.isArray(s[row.key]) ? s[row.key].slice(0, MONTHS) : [];
       while (saved.length < MONTHS) saved.push(row.def);
@@ -115,7 +126,10 @@
   }
   function saveInputs() {
     var i = S.inputs;
-    var keep = { otHours: i.otHours, otRate: i.otRate, offDirect: i.offDirect, offIndirect: i.offIndirect, yoLimit: i.yoLimit };
+    var keep = {
+      otHours: i.otHours, otRate: i.otRate, offIndirect: i.offIndirect, offIndirectNote: i.offIndirectNote,
+      offDirectItems: i.offDirectItems.map(function (it) { return { name: it.name, count: it.count }; }), yoLimit: i.yoLimit
+    };
     REMEMBERED.forEach(function (row) { keep[row.key] = i[row.key]; });
     try { IEApp.settings.write(STORE_KEY, keep); } catch (e) { /* 存不了就算了 */ }
   }
@@ -146,6 +160,12 @@
       OFFLINE.forEach(function (g) {
         out[g.key] = XIO.REPORT_OFFLINE[g.key].map(function (c, k) { return num(i[g.key][k], g.label + '的' + c + '人數'); });
       });
+      out.offIndirectNote = XIO.normalizeText(i.offIndirectNote);
+      // 名稱和人數都空白的那一項不算
+      out[DIRECT.key] = i.offDirectItems.map(function (it, k) {
+        var name = XIO.normalizeText(it.name);
+        return { name: name, count: num(it.count, DIRECT.label + '第 ' + (k + 1) + ' 項' + (name ? '（' + name + '）' : '') + '的人數') };
+      }).filter(function (it) { return it.name !== '' || it.count !== null; });
     } catch (e) {
       return { error: e.message };
     }
@@ -159,6 +179,7 @@
     OFFLINE.forEach(function (g) {
       if (!out[g.key].some(function (v) { return v !== null; })) blanks.push(g.label + '還沒輸入人數，這一列先留空白。');
     });
+    if (!out[DIRECT.key].some(function (it) { return it.count !== null; })) blanks.push(DIRECT.label + '還沒輸入人數，這一列先留空白。');
     if (missWd) blanks.push('平日工作天數沒填的月份，需求人力 On line 會是 #DIV/0!。');
     return { values: out, blanks: blanks };
   }
@@ -216,8 +237,9 @@
     return refs;
   }
 
-  // 現有人力：從「人力」工作表抓第 7 步確認過的那幾列
-  var MP_SHEET = '人力';
+  // 現有人力：從總表 O 行起的人力報表抓第 7 步確認過的那幾列
+  var MP_SHEET = XIO.REPORT_SHEET;          // 人力報表放在總表的 O 行起（第 7 步）
+  var MP_OLD_SHEET = XIO.MP_OLD_SHEET;      // 舊版第 7 步匯出的檔案：自己一張「人力」工作表
   var MP_STORE_KEY = 'step7';
   var MP_LINKS = [
     { key: 'haveOnline', item: 'online', label: 'Online' },
@@ -239,20 +261,23 @@
 
   // 回傳 { haveOnline: { found, label, sheet, row, refs, reason }, … }
   function manpowerLinks(wb, src) {
-    var ws = wb.worksheets.filter(function (w) { return sameName(w.name, MP_SHEET); })[0];
+    // 舊版檔案的「人力」工作表在 A 行起；新版放在總表的 O 行起（往右移 14 行）
+    var old = wb.worksheets.filter(function (w) { return sameName(w.name, MP_OLD_SHEET); })[0];
+    var ws = old || wb.worksheets.filter(function (w) { return sameName(w.name, MP_SHEET); })[0];
+    var off = old ? 0 : XIO.MP_COL - 1;
     var pos = ws ? manpowerPositions(src) : null;
     var out = {};
     MP_LINKS.forEach(function (link) {
-      var info = { found: false, label: link.label, sheet: MP_SHEET, refs: [], from: pos && pos.from };
+      var info = { found: false, label: link.label, sheet: ws ? ws.name : MP_SHEET, refs: [], from: pos && pos.from };
       var r = pos ? parseInt(pos.rows[link.item], 10) : 0;
-      if (!ws) info.reason = '檔案裡沒有「' + MP_SHEET + '」工作表（第 7 步）';
-      else if (!pos || !r) info.reason = '不知道「' + link.label + '」在人力工作表的哪一列，請重做第 7 步';
+      if (!ws) info.reason = '檔案裡沒有第 7 步匯入的人力報表';
+      else if (!pos || !r) info.reason = '不知道「' + link.label + '」在人力報表的哪一列，請重做第 7 步';
       else {
         info.found = true;
         info.row = r;
         var row = ws.findRow(r);
         for (var i = 0; i < MONTHS; i++) {
-          var c = pos.firstCol + i;
+          var c = pos.firstCol + off + i;
           var n = XIO.toNumber(row ? row.findCell(c) && XIO.plainValue(row.findCell(c).value) : null);
           info.refs.push({ sheet: ws.name, col: c, row: r, value: n === null || isNaN(n) ? null : n, numFmt: 'General' });
         }
@@ -305,7 +330,7 @@
 
     panel.appendChild(h('div', { class: 'step-head' },
       h('h1', { text: '總表' }),
-      h('p', { text: '在同一個檔案裡新增「總表」工作表，用公式從 MPS、人力工作表抓產量、需求工時和現有人力，加上畫面上輸入的天數、工時、效率、出勤率和 Off line 人數，算出需求人力、人力差異和 Loading Rate。' })));
+      h('p', { text: '在同一個檔案裡新增「總表」工作表，用公式從 MPS 工作表、總表 O 行起的人力報表抓產量、需求工時和現有人力，加上畫面上輸入的天數、工時、效率、出勤率和 Off line 人數，算出需求人力、人力差異和 Loading Rate。' })));
 
     panel.appendChild(h('ol', { class: 'tasks' },
       h('li', { class: 'task' },
@@ -366,18 +391,75 @@
       (function () { var el = input(inp.yoLimit, 'YO 加班上限幾小時', function (v) { inp.yoLimit = v; }, 'in-tiny'); el.id = 'f9-yo-limit'; return el; })(),
       h('span', { text: '小時/人（預設 ' + XIO.YO_LIMIT_DEFAULT + '）' })));
 
-    // 需求人力 Off line：各種人員的人數（每個月一樣）
+    // 需求人力 Off line_直接：名稱＋人數，可以新增、刪除（每個月一樣）
+    els.offDirectBox = h('div', { class: 'entry-ot off-direct' });
+    els.entry.appendChild(els.offDirectBox);
+    buildDirect();
+
+    // 需求人力 Off line_間接：固定的人員種類（每個月一樣），後面是備註
     OFFLINE.forEach(function (g) {
-      var row = h('div', { class: 'field-row entry-ot' }, h('span', { class: 'field-label', text: g.label + '：' }));
+      var body = h('div', { class: 'off-inline' });       // 輸入框都放在「：」後面；換行時也對齊
+      var row = h('div', { class: 'entry-ot off-direct' }, h('span', { class: 'field-label off-label', text: g.label + '：' }), body);
       XIO.REPORT_OFFLINE[g.key].forEach(function (cat, k) {
         var id = 'f9-' + g.key + '-' + k;
         var el = input(inp[g.key][k], g.label + ' ' + cat + ' 人數', function (v) { inp[g.key][k] = v; }, 'in-tiny');
         el.id = id;
-        row.appendChild(h('label', { for: id, class: 'entry-cat', text: cat }));
-        row.appendChild(el);
+        body.appendChild(h('label', { for: id, class: 'entry-cat', text: cat }));
+        body.appendChild(el);
       });
+      var note = h('input', {
+        id: 'f9-offi-note', type: 'text', class: 'in in-wide off-note', autocomplete: 'off',
+        value: inp.offIndirectNote, placeholder: '會寫在備註欄最前面'
+      });
+      note.addEventListener('input', function () { inp.offIndirectNote = note.value; onType(); });
+      body.appendChild(h('label', { for: 'f9-offi-note', class: 'entry-cat', text: '備註' }));
+      body.appendChild(note);
       els.entry.appendChild(row);
     });
+  }
+
+  // Off line_直接的各項（名稱＋人數）；新增、刪除後重畫這一塊
+  function buildDirect(focusIndex) {
+    var inp = S.inputs;
+    var box = els.offDirectBox;
+    box.textContent = '';
+    box.appendChild(h('span', { class: 'field-label off-label', text: DIRECT.label + '：' }));
+    var body = h('div', { class: 'off-body' });           // 輸入框都放在「：」後面，上下對齊
+    box.appendChild(body);
+    var list = h('div', { class: 'off-items' });
+    inp.offDirectItems.forEach(function (it, k) {
+      var name = h('input', {
+        id: 'f9-offd-name-' + k, type: 'text', class: 'in off-name', autocomplete: 'off', value: it.name,
+        placeholder: '名稱', 'aria-label': DIRECT.label + ' 第 ' + (k + 1) + ' 項的名稱'
+      });
+      name.addEventListener('input', function () { it.name = name.value; onType(); });
+      var count = input(it.count, DIRECT.label + ' 第 ' + (k + 1) + ' 項的人數', function (v) { it.count = v; }, 'in-tiny');
+      var row = h('div', { class: 'off-item' }, name, count, h('span', { class: 'entry-unit', text: '人' }));
+      if (inp.offDirectItems.length > 1) {
+        row.appendChild(h('button', {
+          type: 'button', class: 'link-btn', text: '刪除', 'aria-label': '刪除第 ' + (k + 1) + ' 項' + (it.name ? '（' + it.name + '）' : ''),
+          onclick: function () {
+            inp.offDirectItems.splice(k, 1);
+            buildDirect(Math.min(k, inp.offDirectItems.length - 1));
+            onType();
+          }
+        }));
+      }
+      list.appendChild(row);
+    });
+    body.appendChild(list);
+    body.appendChild(h('button', {
+      type: 'button', class: 'link-btn off-add', text: '＋ 新增一項',
+      onclick: function () {
+        inp.offDirectItems.push({ name: '', count: '' });
+        buildDirect(inp.offDirectItems.length - 1);
+        onType();
+      }
+    }));
+    if (focusIndex !== undefined && focusIndex >= 0) {
+      var el = document.getElementById('f9-offd-name-' + focusIndex);
+      if (el) el.focus();
+    }
   }
 
   function onType() {
@@ -484,7 +566,7 @@
     var replacing = src.kind === 'file' && S.upload.sheets.some(function (n) { return sameName(n, SHEET_NAME); });
     var text = '匯出的檔案有 ' + names.length + ' 個工作表：' + names.join('、') + '。「' + SHEET_NAME +
       '」有兩張表：上面是法定加班上限 46hr，下面（第 28 列起）是 YO 加班上限 ' + read.values.yoLimit + 'hr。';
-    if (replacing) text += ' 檔案裡原本的「' + SHEET_NAME + '」工作表會重新建立。';
+    if (replacing) text += ' 檔案裡原本的「' + SHEET_NAME + '」工作表會重新建立（O 行起的人力報表會保留）。';
     setSummary(text, false, replacing);
 
     if (work.refs && work.refs.length) {

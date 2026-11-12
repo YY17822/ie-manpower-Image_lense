@@ -320,6 +320,7 @@ select.in-month { text-align-last: center; }
 .sheet.is-result .colhead { padding: 0.375rem 0.625rem; white-space: nowrap; }
 .sheet.is-result tr.is-missing td { background: #FFD9D9; }
 .sheet.is-result td.is-top { background: #FFD8A8; }
+.sheet.is-result td.is-later { color: var(--ink-2); font-size: 0.8125rem; }
 .sheet.is-result td.is-missing { background: #FFD9D9; }   /* 人力核對表：空白或不是數字的格子 */
 .sheet.is-check .rowhead { text-align: left; padding: 0.25rem 0.625rem; }
 .sheet.is-result td.is-total { background: #B5E48C; }   /* 和 Excel 裡 Total 那一列的淺綠色一樣 */   /* 和 Excel 裡前三大的淺橘色一樣 */
@@ -343,6 +344,22 @@ select.in-month { text-align-last: center; }
 .entry-ot { margin-top: 0.875rem; }
 .entry-ot .field-label { font-weight: 700; }
 .entry-ot .entry-cat { font-weight: 400; margin-left: 0.25rem; }
+/* Off line_直接：標籤在左，輸入框都放在「：」後面、上下對齊；Off line_間接的標籤一樣寬，兩列的輸入框從同一個位置開始 */
+.off-direct { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.375rem 0.5rem; }
+.entry-ot .off-label { min-width: 12.5em; }
+.off-direct > .off-label { line-height: 2.5rem; }
+.off-body { display: flex; flex-direction: column; gap: 0.375rem; }
+.off-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem 0.5rem; flex: 1 1 16rem; min-width: 0; }
+.off-inline .entry-cat:first-child { margin-left: 0; }
+.off-items { display: flex; flex-direction: column; gap: 0.375rem; }
+.off-item { display: flex; align-items: center; gap: 0.5rem; }
+.off-item .off-name { width: 9rem; }
+.off-add { width: fit-content; }
+.entry-ot .off-note { width: 16rem; max-width: 100%; }
+.file-row { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; }
+.file-row label { font-weight: 700; }
+.file-row .file-name { width: 18rem; max-width: 100%; }
+.file-row .file-ext { color: var(--ink-2); }
 .entry-num { width: 5.5rem; text-align: right; }
 .entry-area + .actions { margin-top: 0.75rem; }
 

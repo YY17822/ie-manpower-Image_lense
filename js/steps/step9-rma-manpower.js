@@ -38,6 +38,9 @@
   var SHEET_NAME = XIO.RMA_SHEET;
   var REPORT_SHEET = XIO.REPORT_SHEET;
   var SUFFIX = '_RMA人力';
+  // 匯出的檔名：年（西元後兩碼）＋首月月份（兩碼）＋這一段，例如 2611_製一課 人力需求預估.xlsx
+  var FILE_TITLE = '_製一課 人力需求預估';
+  var MONTH_NAMES = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
   var STORE_KEY = 'step9';
 
   var S = {
@@ -45,6 +48,7 @@
     preferUpload: false,
     work: null,           // 拿來預覽的活頁簿 { src, loading, error, wb, refs }
     cutDate: today(),     // Cut-off 日期（每次打開預設今天）
+    fileName: null,       // 使用者改過的檔名（null = 用預設的）
     version: loadVersion()
   };
   var els = {};
@@ -65,6 +69,39 @@
   }
 
   function sameName(a, b) { return String(a).toLowerCase() === String(b).toLowerCase(); }
+
+  /* ---------- 匯出的檔名 ---------- */
+  // 月份表頭的文字 → 1～12（Nov、November、11月、11 都可以）；看不懂回傳 0
+  function monthNumber(text) {
+    var s = XIO.normalizeText(text || '').toLowerCase();
+    for (var i = 0; i < 12; i++) if (s.indexOf(MONTH_NAMES[i]) === 0) return i + 1;
+    var m = /^(\d{1,2})\s*月?$/.exec(s) || /(\d{1,2})\s*月/.exec(s);
+    var n = m ? parseInt(m[1], 10) : 0;
+    return n >= 1 && n <= 12 ? n : 0;
+  }
+  // 預設檔名：年取 Cut-off 日期（看不懂就用今天）的年份，首月比 Cut-off 早半年以上時算明年（例如 12 月做 1 月的）
+  function defaultFileName(refs) {
+    var d = /^(\d{4})\D+(\d{1,2})/.exec(XIO.normalizeText(S.cutDate || ''));
+    var now = new Date();
+    var year = d ? parseInt(d[1], 10) : now.getFullYear();
+    var base = d ? parseInt(d[2], 10) : now.getMonth() + 1;
+    var first = monthNumber(refs && refs[0] ? refs[0].text : '') || base;
+    if (first < base - 6) year++;
+    else if (first > base + 6) year--;
+    return String(year).slice(-2) + (first < 10 ? '0' : '') + first + FILE_TITLE;
+  }
+  // 實際要用的檔名（使用者改過就用改過的）；Windows 不能用的字換成 _，補上 .xlsx
+  function exportFileName() {
+    var name = XIO.normalizeText(S.fileName === null ? els.fileName.value : S.fileName).replace(/\.xlsx$/i, '');
+    name = name.replace(/[\\/:*?"<>|]/g, '_').trim();
+    if (!name) name = defaultFileName(S.work && S.work.refs);
+    return name + '.xlsx';
+  }
+  function updateFileName() {
+    var def = defaultFileName(S.work && S.work.refs);
+    if (S.fileName === null) els.fileName.value = def;
+    els.fileReset.hidden = S.fileName === null || S.fileName === def;
+  }
 
   function activeSource() {
     var prev = IEApp.state.withReport;
@@ -105,7 +142,7 @@
   ];
 
   function mainSheet(wb) {
-    var extra = ['P003', '人力', REPORT_SHEET, SHEET_NAME];
+    var extra = ['P003', XIO.MP_OLD_SHEET, REPORT_SHEET, SHEET_NAME];
     return wb.worksheets.filter(function (w) {
       return !extra.some(function (n) { return sameName(n, w.name); });
     })[0] || null;
@@ -183,6 +220,12 @@
     els.preview = h('div', { class: 'sheet-area' });
     els.exportBtn = h('button', { type: 'button', class: 'btn-primary', disabled: true, text: '匯出 Excel', onclick: onExport });
     els.exportNote = h('span', { class: 'export-note', 'aria-live': 'polite' });
+    els.fileName = h('input', { id: 'f10-file', type: 'text', class: 'in file-name', autocomplete: 'off', spellcheck: 'false' });
+    els.fileName.addEventListener('input', function () { S.fileName = els.fileName.value; els.exportNote.textContent = ''; updateFileName(); });
+    els.fileReset = h('button', { type: 'button', class: 'link-btn', hidden: true, text: '恢復預設檔名',
+      onclick: function () { S.fileName = null; updateFileName(); els.fileName.focus(); } });
+    els.fileRow = h('div', { class: 'file-row' },
+      h('label', { for: 'f10-file', text: '檔名' }), els.fileName, h('span', { class: 'file-ext', text: '.xlsx' }), els.fileReset);
 
     panel.appendChild(h('div', { class: 'step-head' },
       h('h1', { text: 'RMA人力需求' }),
@@ -203,7 +246,8 @@
       h('li', { class: 'task' },
         h('h2', { text: 'RMA人力需求' }),
         els.summary, els.notes, els.check, els.preview,
-        h('div', { class: 'actions' }, els.exportBtn, els.exportNote))));
+        h('div', { class: 'actions' }, els.exportBtn, els.fileRow, els.exportNote),
+        h('p', { class: 'hint', text: '檔名預設是「年（西元後兩碼）＋首月月份＋' + FILE_TITLE + '」，例如 2611' + FILE_TITLE + '：年取 Cut-off 日期的年份、月份取總表第一個月的表頭。可以直接改。' }))));
 
     refresh();
   }
@@ -322,6 +366,7 @@
     });
 
     els.exportBtn.disabled = false;
+    updateFileName();
     var refs = work.refs || [];
     IEApp.state.withRmaManpower = {
       outName: outputName(src),
@@ -386,8 +431,9 @@
     ready.build()
       .then(function (wb) { return XIO.toBlob(wb); })
       .then(function (blob) {
-        ui.download(blob, ready.outName);
-        els.exportNote.textContent = '已匯出 ' + ready.outName + '，在瀏覽器的下載資料夾。';
+        var name = exportFileName();
+        ui.download(blob, name);
+        els.exportNote.textContent = '已匯出 ' + name + '，在瀏覽器的下載資料夾。';
       })
       .catch(function (err) {
         els.exportNote.textContent = '匯出失敗：' + (err && err.message ? err.message : err);

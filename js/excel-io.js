@@ -1021,6 +1021,87 @@
     };
   }
 
+  /* ---------- 把一張工作表的內容複製到另一張工作表的某個位置 ---------- */
+
+  /*
+   * 把 src 的儲存格複製到 dst（值、格式、合併儲存格、行寬；公式換成計算結果）。
+   *   o.colOffset  往右移幾行（例如 14：A 行放到 O 行）
+   *   o.fromCol    只複製 src 這一行以後的格子（預設 1）
+   * 列高：dst 那一列還沒設定列高時才用 src 的（dst 原本的版面優先）。隱藏的列不跟著隱藏，免得把 dst 原本的內容藏起來。
+   */
+  function copyCells(src, dst, o) {
+    o = o || {};
+    var off = o.colOffset || 0, from = o.fromCol || 1;
+    var maxCol = 0;
+    eachStoredRow(src, function (row, r) {
+      var nrow = null;
+      eachStoredCell(row, function (cell, c) {
+        if (c < from) return;
+        if (!nrow) nrow = dst.getRow(r);
+        var ncell = nrow.getCell(c + off);
+        ncell.style = cell.style;
+        if (c > maxCol) maxCol = c;
+        if (cell.isMerged && cell.master !== cell) return;
+        var v = exportValue(cell);
+        if (v !== null && v !== '') ncell.value = v;
+      });
+      if (row.height) {
+        var drow = dst.getRow(r);
+        if (!drow.height) drow.height = row.height;
+      }
+    });
+    for (var c = from; c <= maxCol; c++) {
+      var col = src.getColumn(c);
+      if (col.width) dst.getColumn(c + off).width = col.width;
+      if (col.hidden) dst.getColumn(c + off).hidden = true;
+    }
+    listMerges(src).forEach(function (m) {
+      if (m.left < from) return;
+      dst.mergeCellsWithoutStyle(m.top, m.left + off, m.bottom, m.right + off);
+    });
+  }
+
+  /*
+   * 第 7 步：把人力報表整張照抄到「總表」工作表的 O 行起（第 8 步的總表放在 B 到 J 行，同一張工作表）。
+   * 已經有總表時，只換掉 O 行以後的內容；舊版的「人力」工作表會拿掉。
+   * 回傳 { worksheet, colOffset }（人力報表的 A 行 = 總表的第 colOffset + 1 行）
+   */
+  var MP_COL = 15;                 // 人力報表放在總表的 O 行起
+  var MP_OLD_SHEET = '人力';       // 舊版（版本 41 以前）人力報表自己一張工作表的名稱
+  function addManpowerToReport(wb, src) {
+    wb.worksheets
+      .filter(function (w) { return sameSheetName(w.name, MP_OLD_SHEET); })
+      .forEach(function (w) { wb.removeWorksheet(w.id); });
+    var ws = wb.worksheets.filter(function (w) { return sameSheetName(w.name, REPORT_SHEET); })[0];
+    if (ws) {
+      listMerges(ws).forEach(function (m) { if (m.left >= MP_COL) ws.unMergeCells(m.top, m.left, m.bottom, m.right); });
+      eachStoredRow(ws, function (row) {
+        eachStoredCell(row, function (cell, c) { if (c >= MP_COL) { cell.value = null; cell.style = {}; } });
+      });
+    } else {
+      ws = wb.addWorksheet(REPORT_SHEET);
+    }
+    copyCells(src, ws, { colOffset: MP_COL - 1 });
+    return { worksheet: ws, colOffset: MP_COL - 1 };
+  }
+
+  /*
+   * 「總表」排在第一個，開檔時也是顯示總表（匯出時一律做；沒有總表就不動）。
+   */
+  function reportFirst(wb) {
+    var rep = wb.worksheets.filter(function (w) { return sameSheetName(w.name, REPORT_SHEET); })[0];
+    if (!rep) return;
+    var others = wb.worksheets.filter(function (w) { return w !== rep; });
+    rep.orderNo = 0;
+    others.forEach(function (w, i) { w.orderNo = i + 1; });
+    wb.views = [{ x: 0, y: 0, width: 10000, height: 20000, firstSheet: 0, activeTab: 0, visibility: 'visible' }];
+    wb.worksheets.forEach(function (w) {
+      var views = w.views && w.views.length ? w.views.slice() : [{}];
+      views[0] = Object.assign({}, views[0], { tabSelected: w === rep });
+      w.views = views;
+    });
+  }
+
   /* ---------- 把整張工作表複製到另一個活頁簿 ---------- */
 
   /*
@@ -1634,7 +1715,9 @@
   }
 
   /*
-   * 把 MPS 匯總寫進工作表（最後一列資料之後空一列開始，共三列，對齊各月的行），每格都是公式。
+   * 把 MPS 匯總寫進工作表（最後一列資料之後空一列開始，共三列，對齊各月的行）。
+   * Top 3／Non-Top 3 兩列先留空白：要照需求工時的前三大料號算，第 6 步才填（見 planMpsTop）。
+   * 下面是舊版（依數量排前三大）的寫法，留著當作參考：
    * 以 WIP 在 D 行、當月在 E 行、資料在第 5 到 74 列為例：
    *
    *                 當月（要加 WIP）                              其他月份
@@ -1716,7 +1799,8 @@
         if (font) style.font = font;
         if (j === 0) style.fill = TOTAL_FILL;
         cell.style = style;
-        cell.value = { formula: formulas[j], result: results[j] };
+        // Top 3／Non-Top 3 要照需求工時的前三大挑料號，第 6 步才填（planMpsTop），這裡先留空白
+        cell.value = j === 0 ? { formula: formulas[j], result: results[j] } : null;
       });
     });
 
@@ -1733,27 +1817,10 @@
       if (!labelColumn.width || labelColumn.width < 12) labelColumn.width = 12;
     }
 
-    // 前三大標淺橘色：先拿掉之前加在這幾行的規則，再一個月加一條
+    // 前三大的淺橘色也是第 6 步照需求工時標；這裡先拿掉之前加在這幾行的規則（重做時）
     main.conditionalFormattings = (main.conditionalFormattings || []).filter(function (cf) {
       var m = /^([A-Z]+)\d+:([A-Z]+)\d+$/.exec(String(cf.ref || ''));
       return !(m && m[1] === m[2] && inMonth[colToNum(m[1])]);
-    });
-    var fillStyle = { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: TOP_FILL_ARGB } } };
-    plan.months.forEach(function (m, i) {
-      var L = numToCol(m.col);
-      var here = L + first;
-      var formula;
-      if (i === 0) {
-        var both = '$' + wipL + first + '+' + here;
-        formula = 'AND(' + both + '>0,SUMPRODUCT(--($' + wipL + '$' + first + ':$' + wipL + '$' + last + '+' +
-          L + '$' + first + ':' + L + '$' + last + '>' + both + '))<' + topN + ')';
-      } else {
-        formula = 'AND(' + here + '>0,' + here + '>=LARGE(' + L + '$' + first + ':' + L + '$' + last + ',' + topN + '))';
-      }
-      main.addConditionalFormatting({
-        ref: L + first + ':' + L + last,
-        rules: [{ type: 'expression', priority: nextPriority(main), formulae: [formula], style: fillStyle }]
-      });
     });
 
     // RMA Total：RMA 最後一列之後空一列，標籤和 Total 一樣放在第一個月左邊那一行
@@ -1849,7 +1916,7 @@
       });
     }
 
-    return {
+    var plan = {
       found: true,
       startCol: block.col,
       width: block.width,
@@ -1862,6 +1929,98 @@
       months: months,
       rma: rmaPlan(main, blocks, months.map(function (m) { return m.col; }), 0)   // RMA總需求工時（沒有 RMA 區塊時是 null）
     };
+    plan.mpsTop = planMpsTop(main, plan, Math.min(topN, lastRow - o.dataStartRow + 1));
+    return plan;
+  }
+
+  /*
+   * 第 2 步的 Top 3／Non-Top 3（數量）：照第 6 步各月需求工時的前三大料號，把那幾個料號的數量加起來。
+   * 每個月各自挑（每個月可能是不同的三個料號）；當月的數量要加 WIP。數值是 0 的不算，同分的都算進去。
+   * 以 WIP 在 D 行、當月在 E 行、當月需求工時在 N 行、資料在第 5 到 74 列為例：
+   *
+   *   Top 3       =SUMPRODUCT((N5:N74>0)*(N5:N74>=LARGE(N5:N74,3))*(D5:D74+E5:E74))
+   *   其他月       =SUMPRODUCT((O5:O74>0)*(O5:O74>=LARGE(O5:O74,3))*F5:F74)
+   *   Non-Top 3   =E76-E77
+   *   淺橘色       E5:E74 的條件式格式 =AND($N5>0,$N5>=LARGE($N$5:$N$74,3))（和需求工時標的是同一列）
+   *
+   * 數量在哪幾行：從第 5 步的需求工時公式讀出來（當月 =(D5+E5)*K5、其他月 =F5*K5）。
+   * 回傳 { found, reason, wipCol, labelCol, months: [{ qtyCol, hoursCol, formula, top, total, rest }] }
+   *   reason：'formula'（需求工時不是第 5 步的公式）、'step2'（沒有第 2 步的 Total）
+   */
+  function planMpsTop(main, plan, topN) {
+    var a = plan.firstRow, b = plan.lastRow;
+    var wipCol = 0, qtyCols = [];
+    for (var i = 0; i < plan.width; i++) {
+      var hc = plan.startCol + i, qc = 0;
+      for (var r = a; r <= b && !qc; r++) {
+        var raw = cellRawValue(main.findCell(r, hc));
+        var f = raw && typeof raw === 'object' && raw.formula !== undefined ? String(raw.formula).replace(/\$/g, '') : '';
+        if (!f) continue;
+        var m = i === 0 ? /^\(([A-Z]+)\d+\+([A-Z]+)\d+\)\*/.exec(f) : /^([A-Z]+)\d+\*/.exec(f);
+        if (!m) return { found: false, reason: 'formula' };
+        if (i === 0) { wipCol = colToNum(m[1]); qc = colToNum(m[2]); } else qc = colToNum(m[1]);
+      }
+      if (!qc) return { found: false, reason: 'formula' };
+      qtyCols.push(qc);
+    }
+    var labelCol = qtyCols[0] - 1;
+    var lab = labelCol >= 1 ? main.findCell(plan.totalRow, labelCol) : null;
+    if (!lab || labelMatchKey(displayText(lab)) !== 'total') return { found: false, reason: 'step2' };
+
+    var W = numToCol(wipCol);
+    var months = qtyCols.map(function (qc, i) {
+      var hc = plan.startCol + i;
+      var H = numToCol(hc), Q = numToCol(qc);
+      var hr = H + a + ':' + H + b;
+      var qty = i === 0 ? '(' + W + a + ':' + W + b + '+' + Q + a + ':' + Q + b + ')' : Q + a + ':' + Q + b;
+      // 算一份結果給畫面和 Excel 開檔前顯示
+      var hours = [], error = null;
+      for (var r = a; r <= b; r++) {
+        var hv = numberOrError(main.findCell(r, hc));
+        var qv = numberOrError(main.findCell(r, qc));
+        var wv = i === 0 ? numberOrError(main.findCell(r, wipCol)) : { value: 0 };
+        if (hv.error || qv.error || wv.error) { if (!error) error = hv.error || qv.error || wv.error; continue; }
+        hours.push({ row: r, h: hv.value, q: qv.value + wv.value });
+      }
+      var sorted = hours.map(function (x) { return x.h; }).sort(function (x, y) { return y - x; });
+      var cut = sorted.length >= topN ? sorted[topN - 1] : -Infinity;
+      var top = 0, total = 0, rows = [];
+      hours.forEach(function (x) {
+        total += x.q;
+        if (x.h > 0 && x.h >= cut) { top += x.q; rows.push(x.row); }
+      });
+      return {
+        qtyCol: qc, hoursCol: hc, rows: rows, error: error,
+        formula: 'SUMPRODUCT((' + hr + '>0)*(' + hr + '>=LARGE(' + hr + ',' + topN + '))*' + qty + ')',
+        mark: 'AND($' + H + a + '>0,$' + H + a + '>=LARGE($' + H + '$' + a + ':$' + H + '$' + b + ',' + topN + '))',
+        top: top, total: total, rest: total - top
+      };
+    });
+    return { found: true, wipCol: wipCol, labelCol: labelCol, topRow: plan.topRow, restRow: plan.restRow, totalRow: plan.totalRow, months: months };
+  }
+
+  // 把 planMpsTop 的結果寫進第 2 步那兩列，並在數量那幾行標淺橘色
+  function writeMpsTop(main, mt, first, last) {
+    var inQty = {};
+    mt.months.forEach(function (m) { inQty[m.qtyCol] = true; });
+    main.conditionalFormattings = (main.conditionalFormattings || []).filter(function (cf) {
+      var x = /^([A-Z]+)\d+:([A-Z]+)\d+$/.exec(String(cf.ref || ''));
+      return !(x && x[1] === x[2] && inQty[colToNum(x[1])]);
+    });
+    var fillStyle = { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: TOP_FILL_ARGB } } };
+    mt.months.forEach(function (m) {
+      var Q = numToCol(m.qtyCol);
+      var topCell = main.getCell(mt.topRow, m.qtyCol);
+      var restCell = main.getCell(mt.restRow, m.qtyCol);
+      if (!topCell.numFmt) topCell.numFmt = INTEGER_FORMAT;
+      if (!restCell.numFmt) restCell.numFmt = INTEGER_FORMAT;
+      topCell.value = { formula: m.formula, result: m.error ? { error: m.error } : m.top };
+      restCell.value = { formula: Q + mt.totalRow + '-' + Q + mt.topRow, result: m.error ? { error: m.error } : m.rest };
+      main.addConditionalFormatting({
+        ref: Q + first + ':' + Q + last,
+        rules: [{ type: 'expression', priority: nextPriority(main), formulae: [m.mark], style: fillStyle }]
+      });
+    });
   }
 
   /*
@@ -1969,6 +2128,9 @@
         style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: TOP_FILL_ARGB } } }
       }]
     });
+
+    // 第 2 步的 Top 3／Non-Top 3（數量）：照這裡需求工時的前三大料號填
+    if (plan.mpsTop && plan.mpsTop.found) writeMpsTop(main, plan.mpsTop, plan.firstRow, plan.lastRow);
 
     // RMA總需求工時：和第 2 步的 RMA Total 同一列，標籤放在需求工時左邊那一行
     if (plan.rma) {
@@ -2264,7 +2426,9 @@
    *                effTop3 / effNonTop3 / attendance   [6 個月的 %]（例如 80 代表 80%，存成 0.8）
    *                otHours      每日加班幾小時
    *                otRate       加班出勤人數 %（例如 80 代表 80%）
-   *                offDirect / offIndirect   各種人員的人數，順序同 REPORT_OFFLINE（null = 沒填）
+   *                offDirect / offIndirect   各種人員：[{ name, count }]（名稱＋人數，count null = 沒填），
+   *                             或舊的 [人數]（名稱照 REPORT_OFFLINE 的順序）
+   *                offIndirectNote  Off line_間接的備註（寫在備註欄最前面，後面才接各種人數）
    * o.yoLimit    第二張表（第 28 列起）的 YO 加班上限，預設 78；第二張表的假日工作天數 =(78-D34*2)/8，
    *              其他輸入和抓來的數值參照第一張表（例如 D34 =D8）
    *              假日工作天數一律填公式 =(46-D8*2)/8；加班時間填公式 =2*60*80%（兩個數字都有才填），備註寫輸入的數值
@@ -2272,9 +2436,9 @@
    */
   function addReportSheet(wb, o) {
     o = o || {};
-    wb.worksheets
-      .filter(function (w) { return sameSheetName(w.name, REPORT_SHEET); })
-      .forEach(function (w) { wb.removeWorksheet(w.id); });
+    // 原本的總表先改名放旁邊：O 行以後是第 7 步的人力報表，新的總表做好之後搬回來
+    var olds = wb.worksheets.filter(function (w) { return sameSheetName(w.name, REPORT_SHEET); });
+    olds.forEach(function (w, i) { w.name = '__old_report_' + i; });
     var ws = wb.addWorksheet(REPORT_SHEET);
     var R = REPORT;
     var C = REPORT_COLOR;
@@ -2494,14 +2658,24 @@
         ' 小時 × 60 × 加班出勤人數 ' + (isNum(inp.otRate) ? inp.otRate : '?') + '%');
     }
 
-    // 需求人力 Off line_直接、Off line_間接：各種人員的人數相加（每個月一樣），備註寫各種人數
-    [['needOffDirect', 'offDirect'], ['needOffIndirect', 'offIndirect']].forEach(function (pair) {
-      var key = pair[0], cats = REPORT_OFFLINE[pair[1]], counts = inp[pair[1]] || [];
-      if (!counts.some(isNum)) return;
-      var nums = cats.map(function (c, i) { return isNum(counts[i]) ? counts[i] : 0; });
-      var total = nums.reduce(function (x, y) { return x + y; }, 0);
-      for (var m = 0; m < R.months; m++) setFormula(cellOf(rows, key, m), nums.join('+'), total, 'General');
-      setNote(rows, key, cats.map(function (c, i) { return c + ' ' + nums[i]; }).join('、'));
+    // 需求人力 Off line_直接、Off line_間接：各種人員的人數相加（每個月一樣），例如 =2+3+1+4+1，
+    // 備註寫各種人數（文書 2、物料 3、…）；Off line_間接的備註文字放在最前面
+    [['needOffDirect', 'offDirect', ''], ['needOffIndirect', 'offIndirect', inp.offIndirectNote]].forEach(function (g) {
+      var key = g[0], cats = REPORT_OFFLINE[g[1]];
+      var items = (inp[g[1]] || []).map(function (v, i) {
+        return v && typeof v === 'object' ? { name: normalizeText(v.name || ''), count: v.count } : { name: cats[i] || '', count: v };
+      }).filter(function (it) { return it.name !== '' || isNum(it.count); });
+      var lead = g[2] ? normalizeText(g[2]) : '';
+      var parts = [];
+      if (items.some(function (it) { return isNum(it.count); })) {
+        var nums = items.map(function (it) { return isNum(it.count) ? it.count : 0; });
+        var total = nums.reduce(function (x, y) { return x + y; }, 0);
+        for (var m = 0; m < R.months; m++) setFormula(cellOf(rows, key, m), nums.join('+'), total, 'General');
+        parts = items.map(function (it, i) { return (it.name || '其他') + ' ' + nums[i]; });
+      }
+      var note = parts.join('、');
+      if (lead) note = note ? lead + ' ' + note : lead;          // 備註文字和人數之間空一格
+      if (note) setNote(rows, key, note);
     });
 
     fillComputed(rows, OVERTIME_LIMIT);
@@ -2529,6 +2703,12 @@
       if (note) setNote(rows2, key, note);
     });
     fillComputed(rows2, yoLimit);
+
+    // 第 7 步的人力報表（O 行以後）搬回新的總表
+    olds.forEach(function (w) {
+      copyCells(w, ws, { fromCol: MP_COL });
+      wb.removeWorksheet(w.id);
+    });
 
     wb.calcProperties = Object.assign({}, wb.calcProperties, { fullCalcOnLoad: true });
     return { worksheet: ws, rows: rows, rows2: rows2, monthCol: R.monthCol, months: R.months, yoLimit: yoLimit };
@@ -2681,6 +2861,7 @@
   function sameSheetName(a, b) { return String(a).toLowerCase() === String(b).toLowerCase(); }
 
   function toBlob(workbook) {
+    reportFirst(workbook);          // 有總表時，總表排第一個、開檔時顯示總表
     return workbook.xlsx.writeBuffer().then(function (buf) {
       return new Blob([buf], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -2689,7 +2870,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 39,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 44,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,
@@ -2717,6 +2898,11 @@
     RMA_GAP: RMA_GAP,
     blankRows: blankRows,
     copySheet: copySheet,
+    copyCells: copyCells,
+    addManpowerToReport: addManpowerToReport,
+    reportFirst: reportFirst,
+    MP_COL: MP_COL,
+    MP_OLD_SHEET: MP_OLD_SHEET,
     guessHeaderRow: guessHeaderRow,
     columnLabels: columnLabels,
     lookupKey: lookupKey,

@@ -1,7 +1,8 @@
 /*
  * 第 7 步：匯入人力報表
  *   把人力報表（未來六個月的人力預計）放進前面做好的 Excel，
- *   成為同一個檔案裡名為「人力」的工作表（整張照抄）。
+ *   放在「總表」工作表的 O 行起（整張照抄；第 8 步的總表放在同一張工作表的 B 到 J 行）。
+ *   人力報表的 A 行 = 總表的 O 行（往右移 14 行），列號不變。
  *
  *   匯入之後請使用者確認兩件事，之後做總表時才知道要去哪幾格抓資料：
  *     1. 這六個項目各在第幾列：
@@ -18,8 +19,9 @@
  *     b. 上傳之前第 6 步匯出的檔案
  *
  * 做完之後把結果放在 IEApp.state.withManpower，下一步直接拿來用：
- *   rows           { online: 5, onlineProd: 6, … } 各項目在「人力」工作表的第幾列
- *   firstMonthCol  當月在第幾行（A=1）
+ *   rows           { online: 5, onlineProd: 6, … } 各項目在第幾列（人力報表和總表的列號一樣）
+ *   firstMonthCol  當月在人力報表的第幾行（A=1）；在總表是 firstMonthCol + colOffset
+ *   colOffset      14（人力報表的 A 行放在總表的 O 行）
  *   monthCount     6
  */
 (function (global) {
@@ -30,7 +32,9 @@
   var ui = IEApp.ui;
   var h = IEApp.h;
 
-  var SHEET_NAME = '人力';
+  var SHEET_NAME = XIO.REPORT_SHEET;        // 人力報表放在「總表」工作表的 O 行起
+  var OLD_SHEET = XIO.MP_OLD_SHEET;         // 舊版自己一張的「人力」工作表
+  var COL_OFFSET = XIO.MP_COL - 1;
   var REF_SHEET = 'P003';
   var SUFFIX = '_人力';
   var MONTHS = 6;
@@ -64,7 +68,7 @@
   }
 
   function sameName(a, b) { return String(a).toLowerCase() === String(b).toLowerCase(); }
-  function isExtra(name) { return sameName(name, REF_SHEET) || sameName(name, SHEET_NAME); }
+  function isExtra(name) { return sameName(name, REF_SHEET) || sameName(name, SHEET_NAME) || sameName(name, OLD_SHEET); }
 
   // 前面步驟的結果：第 6 步（需求工時匯總）
   function previous() {
@@ -138,7 +142,7 @@
 
     panel.appendChild(h('div', { class: 'step-head' },
       h('h1', { text: '匯入人力報表' }),
-      h('p', { text: '把人力報表（未來六個月的人力預計）放進前面做好的 Excel，成為同一個檔案裡名為「人力」的工作表。匯入後確認各項目在哪一列、當月在哪一行，之後做總表時就照這些位置抓資料。' })));
+      h('p', { text: '把人力報表（未來六個月的人力預計）放進前面做好的 Excel，放在「總表」工作表的 O 行起（第 8 步的總表放在同一張的 B 到 J 行）。匯入後確認各項目在哪一列、當月在哪一行，之後做總表時就照這些位置抓資料。' })));
 
     panel.appendChild(h('ol', { class: 'tasks' },
       h('li', { class: 'task' },
@@ -178,7 +182,7 @@
         if (!others.length) throw new Error('這個檔案沒有 MPS 工作表，看起來不是第 6 步匯出的檔案。請上傳第 6 步匯出的 Excel。');
         S.base = {
           name: file.name, buffer: res.buffer, sheets: names,
-          hasManpower: names.some(function (n) { return sameName(n, SHEET_NAME); })
+          hasManpower: names.some(function (n) { return sameName(n, SHEET_NAME) || sameName(n, OLD_SHEET); })
         };
         S.preferUpload = true;
         els.exportNote.textContent = '';
@@ -207,7 +211,7 @@
         showManpowerFile();
         // 檔案裡有叫「人力」的工作表就先選那一張，沒有就選第一張
         var sheets = res.workbook.worksheets;
-        var named = sheets.filter(function (ws) { return sameName(ws.name, SHEET_NAME); })[0];
+        var named = sheets.filter(function (ws) { return sameName(ws.name, OLD_SHEET); })[0];
         pickSheet(named ? sheets.indexOf(named) : 0);
       })
       .catch(function (err) {
@@ -431,17 +435,18 @@
     var firstL = XIO.numToCol(pick.firstCol);
     var lastL = XIO.numToCol(pick.firstCol + MONTHS - 1);
     var replacing = src.kind === 'file' && S.base.hasManpower;
-    var text = '匯出的檔案會多一個「' + SHEET_NAME + '」工作表（' + mp.ext.lastRow.toLocaleString('en-US') + ' 列、' +
-      mp.ext.colCount + ' 行）。當月是 ' + firstL + ' 行，六個月是 ' + firstL + ' 到 ' + lastL + ' 行。';
-    if (replacing) text += ' 檔案裡原本的「' + SHEET_NAME + '」工作表會換成這次上傳的。';
+    var text = '人力報表（' + mp.ext.lastRow.toLocaleString('en-US') + ' 列、' + mp.ext.colCount + ' 行）會放在「' + SHEET_NAME +
+      '」工作表的 O 行起（第 8 步的總表放在同一張的 B 到 J 行）。當月是人力報表的 ' + firstL + ' 行，六個月是 ' + firstL + ' 到 ' + lastL +
+      ' 行；放到總表後是 ' + XIO.numToCol(pick.firstCol + COL_OFFSET) + ' 到 ' + XIO.numToCol(pick.firstCol + COL_OFFSET + MONTHS - 1) + ' 行。';
+    if (replacing) text += ' 檔案裡原本的人力報表會換成這次上傳的。';
     setSummary(text, false, warn || replacing);
     els.exportBtn.disabled = false;
 
     // 給下一步用
     var sheets = src.kind === 'prev'
       ? [prev.mainSheet, REF_SHEET]
-      : S.base.sheets.filter(function (n) { return !sameName(n, SHEET_NAME); });
-    sheets = sheets.concat([SHEET_NAME]);
+      : S.base.sheets.filter(function (n) { return !sameName(n, SHEET_NAME) && !sameName(n, OLD_SHEET); });
+    sheets = [SHEET_NAME].concat(sheets);
     var rowsCopy = {};
     ITEMS.forEach(function (item) { rowsCopy[item.key] = pick.rows[item.key]; });
     var sheet = mp.ws;
@@ -452,6 +457,7 @@
       dataStartRow: src.kind === 'prev' ? prev.dataStartRow : 0,
       keyCol: src.kind === 'prev' && prev.keyCol ? prev.keyCol : 1,
       manpowerSheet: SHEET_NAME,
+      colOffset: COL_OFFSET,
       rows: rowsCopy,
       firstMonthCol: pick.firstCol,
       monthCount: MONTHS,
@@ -492,7 +498,7 @@
         }));
       });
       body.appendChild(tr);
-      if (r && !example) example = "='" + SHEET_NAME + "'!" + XIO.numToCol(read.cols[0]) + r;
+      if (r && !example) example = "='" + SHEET_NAME + "'!" + XIO.numToCol(read.cols[0] + COL_OFFSET) + r;
     });
 
     els.check.appendChild(h('p', { class: 'sheet-caption', text: '照上面選的位置，之後總表會抓到的數值：' }));
@@ -505,13 +511,13 @@
   }
 
   /* ---------- 產生活頁簿 ---------- */
-  // 每次都從頭產生一份新的：前面步驟的內容 + 人力工作表。回傳 Promise<Workbook>
+  // 每次都從頭產生一份新的：前面步驟的內容 + 總表 O 行起的人力報表。回傳 Promise<Workbook>
   function buildWorkbook(src, sheet) {
     var base = src.kind === 'prev'
       ? Promise.resolve(src.prev.build())
       : XIO.load(src.base.buffer.slice(0));
     return base.then(function (wb) {
-      XIO.copySheet(sheet, wb, SHEET_NAME);
+      XIO.addManpowerToReport(wb, sheet);
       return wb;
     });
   }
