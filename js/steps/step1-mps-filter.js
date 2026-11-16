@@ -736,7 +736,11 @@
       mainRows: result.mainRows,
       rmaRows: result.rma ? result.rma.rows : 0,
       headerEnd: result.headerEnd,
-      build: function () { return XIO.filter(ws, opts).workbook; }
+      build: function () {
+        var wb = XIO.filter(ws, opts).workbook;
+        XIO.setMpsSources(wb, [S.fileName]);      // 記下 MPS 檔名，第 8 步寫進總表的 M1、M2
+        return wb;
+      }
     };
   }
 

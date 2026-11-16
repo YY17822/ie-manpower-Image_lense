@@ -1021,6 +1021,20 @@
     };
   }
 
+  /* ---------- 第 1 步上傳的 MPS 檔名 ----------
+   * 記在活頁簿的「描述」（檔案 → 資訊 → 摘要）裡，例如「MPS資料來源：MPS_1110.xlsx」；
+   * 後面每一步（包括上傳之前匯出的檔案）都讀得到，第 8 步寫進總表的 M1、M2。多個檔名用「 | 」分開。
+   */
+  var MPS_SOURCE_TAG = 'MPS資料來源：';
+  function setMpsSources(wb, names) {
+    wb.description = MPS_SOURCE_TAG + (names || []).filter(Boolean).join(' | ');
+  }
+  function getMpsSources(wb) {
+    var d = String((wb && wb.description) || '');
+    if (d.indexOf(MPS_SOURCE_TAG) !== 0) return [];
+    return d.slice(MPS_SOURCE_TAG.length).split(' | ').map(function (s) { return s.trim(); }).filter(Boolean);
+  }
+
   /* ---------- 把一張工作表的內容複製到另一張工作表的某個位置 ---------- */
 
   /*
@@ -1067,6 +1081,7 @@
    * 回傳 { worksheet, colOffset }（人力報表的 A 行 = 總表的第 colOffset + 1 行）
    */
   var MP_COL = 15;                 // 人力報表放在總表的 O 行起
+  var MPS_SOURCE_COL = 13;         // 總表 M 行：M1「MPS資料來源」、M2 第 1 步上傳的 MPS 檔名
   var MP_OLD_SHEET = '人力';       // 舊版（版本 41 以前）人力報表自己一張工作表的名稱
   function addManpowerToReport(wb, src) {
     wb.worksheets
@@ -2704,6 +2719,19 @@
     });
     fillComputed(rows2, yoLimit);
 
+    // M1、M2：MPS 資料來源（第 1 步上傳的 MPS 檔名，多個用「、」分開）
+    var srcNames = o.mpsSources || getMpsSources(wb);
+    var srcText = srcNames.join('、');
+    var m1 = ws.getCell(1, MPS_SOURCE_COL);
+    m1.value = 'MPS資料來源';
+    m1.style = { font: font({ bold: true }), alignment: LEFT };
+    var m2 = ws.getCell(2, MPS_SOURCE_COL);
+    m2.value = srcText || null;
+    m2.style = { font: font(), alignment: LEFT };
+    var mw = 14;
+    srcText.split('').forEach(function (ch) { mw += ch.charCodeAt(0) > 255 ? 2.1 : 1.1; });
+    ws.getColumn(MPS_SOURCE_COL).width = Math.min(Math.max(mw - 12, 16), 90);
+
     // 第 7 步的人力報表（O 行以後）搬回新的總表
     olds.forEach(function (w) {
       copyCells(w, ws, { fromCol: MP_COL });
@@ -2870,7 +2898,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 44,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 45,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,
@@ -2903,6 +2931,8 @@
     reportFirst: reportFirst,
     MP_COL: MP_COL,
     MP_OLD_SHEET: MP_OLD_SHEET,
+    setMpsSources: setMpsSources,
+    getMpsSources: getMpsSources,
     guessHeaderRow: guessHeaderRow,
     columnLabels: columnLabels,
     lookupKey: lookupKey,

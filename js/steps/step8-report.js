@@ -560,7 +560,8 @@
     var read = readInputs();
     if (read.error) { setSummary(read.error, true); return; }
     // 每次都照目前的輸入重新產生總表（給預覽用）
-    work.report = XIO.addReportSheet(work.wb, { monthRefs: work.refs || [], links: linkRefs(work.links), inputs: read.values, yoLimit: read.values.yoLimit });
+    var sources = mpsSources(work.wb);
+    work.report = XIO.addReportSheet(work.wb, { monthRefs: work.refs || [], links: linkRefs(work.links), inputs: read.values, yoLimit: read.values.yoLimit, mpsSources: sources });
     var ws = work.report.worksheet;
     var names = work.wb.worksheets.map(function (w) { return w.name; });
     var replacing = src.kind === 'file' && S.upload.sheets.some(function (n) { return sameName(n, SHEET_NAME); });
@@ -569,6 +570,9 @@
     if (replacing) text += ' 檔案裡原本的「' + SHEET_NAME + '」工作表會重新建立（O 行起的人力報表會保留）。';
     setSummary(text, false, replacing);
 
+    els.notes.appendChild(sources.length
+      ? h('li', null, 'M1 寫「MPS資料來源」，M2 寫第 1 步上傳的 MPS 檔名：' + sources.join('、') + '。')
+      : h('li', { class: 'is-warn' }, '找不到第 1 步上傳的 MPS 檔名（這個檔案是舊版做的），M2 先留空白。從第 1 步重做就會有。'));
     if (work.refs && work.refs.length) {
       var r0 = work.refs[0];
       els.notes.appendChild(h('li', null, '月份表頭參照 ' + work.main.name + ' 工作表「需求工時」的月份，例如 D3 ＝ ' +
@@ -687,10 +691,18 @@
     els.summary.className = 'summary' + (isError ? ' is-error' : '') + (isWarn ? ' is-warn' : '');
   }
 
+  // 第 1 步上傳的 MPS 檔名：記在活頁簿裡（第 1 步寫的）；舊版檔案沒有的話，用這次第 1 步的檔名
+  function mpsSources(wb) {
+    var names = XIO.getMpsSources(wb);
+    var f = IEApp.state.mpsFiltered;
+    if (!names.length && f && f.sourceName) names = [f.sourceName];
+    return names;
+  }
+
   /* ---------- 產生活頁簿 ---------- */
   function buildWorkbook(src, refs, links, inputs) {
     return buildFrom(src).then(function (wb) {
-      XIO.addReportSheet(wb, { monthRefs: refs, links: links, inputs: inputs, yoLimit: inputs.yoLimit });
+      XIO.addReportSheet(wb, { monthRefs: refs, links: links, inputs: inputs, yoLimit: inputs.yoLimit, mpsSources: mpsSources(wb) });
       return wb;
     });
   }
