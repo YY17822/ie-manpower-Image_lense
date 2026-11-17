@@ -451,6 +451,10 @@
         '有 ' + plan.errors + ' 列算不出 CT.（Base Qty 是空白或 0，或 Labor、Base Qty 不是數字）：' +
         listText(errs, 8) + '。Excel 裡這些格會顯示 #DIV/0! 或 #VALUE!。'));
     }
+    if (plan.spare && plan.spare.length) {
+      els.notes.appendChild(h('li', null, 'RMA 預留的 ' + plan.spare.length + ' 列空白（第 ' + plan.spare[0] + ' 到 ' + plan.spare[plan.spare.length - 1] +
+        ' 列）會填查表公式：之後在 Excel 填料號，CT. 就自動從 P003 帶入；P003 找不到時 CT. 是 0、標粉紅色。'));
+    }
     if (plan.blank) {
       els.notes.appendChild(h('li', null, '另有 ' + plan.blank + ' 列的料號是空白，略過不填。'));
     }

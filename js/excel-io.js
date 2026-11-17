@@ -795,13 +795,41 @@
     var title = rmaTitleRow(ws, dataStartRow);
     var mainLast = 0, rmaLast = 0;
     eachStoredRow(ws, function (row, r) {
-      if (r < dataStartRow || r === title) return;
+      if (r < dataStartRow || r === title || (title && r > title)) return;
       var cell = row.findCell(keyCol);
-      if (!cell || normalizeText(displayText(cell)) === '') return;
-      if (title && r > title) rmaLast = Math.max(rmaLast, r);
-      else mainLast = Math.max(mainLast, r);
+      if (cell && normalizeText(displayText(cell)) !== '') mainLast = Math.max(mainLast, r);
     });
+    // RMA 區：標題下面一列一列往下，料號有字、或第一格有框線（第 1 步畫的細格線，包含預留的空白列）就算，
+    // 碰到兩個都沒有的列（RMA Total 上面空的那一列）就結束。在 Excel 插入的列會帶格線，也認得到。
+    if (title) {
+      for (var r = title + 1; ; r++) {
+        var row = ws.findRow(r);
+        var key = row ? row.findCell(keyCol) : null;
+        var c1 = row ? row.findCell(1) : null;
+        var b = c1 && c1.style ? c1.style.border : null;
+        var hasKey = !!key && normalizeText(displayText(key)) !== '';
+        if (!hasKey && !(b && (b.top || b.bottom || b.left || b.right))) break;
+        rmaLast = r;
+      }
+    }
     return { mainFirst: dataStartRow, mainLast: mainLast, rmaTitle: title, rmaFirst: title ? title + 1 : 0, rmaLast: rmaLast };
+  }
+
+  // 預留列（RMA 區料號空白的列）要用的格式：數值是 0 時不顯示，看起來是空白
+  var HIDE_ZERO_GENERAL = 'General;-General;;@';
+  var HIDE_ZERO_INTEGER = '#,##0;-#,##0;;@';
+  // 預留列「有料號但 CT. 是 0」（P003 找不到）時標粉紅色的條件式格式規則，例如 =AND($A86<>"",$L86=0)
+  function spareMissingRule(main, keyCol, ctCol, firstRow) {
+    var K = numToCol(keyCol), L = numToCol(ctCol);
+    return {
+      type: 'expression', priority: nextPriority(main),
+      formulae: ['AND($' + K + firstRow + '<>"",$' + L + firstRow + '=0)'],
+      style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: MISSING_FILL.fgColor.argb } } }
+    };
+  }
+  // 拿掉 ref 剛好是這一塊的條件式格式（重做時用）
+  function dropRule(main, ref) {
+    main.conditionalFormattings = (main.conditionalFormattings || []).filter(function (cf) { return cf.ref !== ref; });
   }
 
   // RMA 區塊各月的合計（cols 是要加總的行；wipCol 有給時第一個月要加上 WIP）。沒有 RMA 標題回傳 null
@@ -983,7 +1011,22 @@
       if (keepCols.length > 1) ows.mergeCellsWithoutStyle(titleRow, 1, titleRow, keepCols.length);
       var at = titleRow + 1;
       rmaList.forEach(function (row) { copyRow(row, at++); });
-      rma = { titleRow: titleRow, firstRow: titleRow + 1, lastRow: rmaList.length ? at - 1 : 0, rows: rmaList.length };
+      // 預留空白列：之後在 Excel 手動新增 RMA 用（第 4、5 步會先寫好 CT.、需求工時的公式）
+      var spare = Math.max(0, Math.min(200, parseInt(opts.rmaSpare, 10) || 0));
+      at += spare;
+      // 整個 RMA 區（保留的行）畫細格線，後面的步驟也靠這些格線認出 RMA 區（包含預留列）
+      var THIN = { style: 'thin' };
+      var gFont = sample && sample.style && sample.style.font ? Object.assign({}, sample.style.font, { bold: false }) : undefined;
+      for (var gr = titleRow + 1; gr < at; gr++) {
+        for (var gc = 1; gc <= keepCols.length; gc++) {
+          var gcell = ows.getCell(gr, gc);
+          var gst = Object.assign({}, gcell.style);
+          gst.border = { top: THIN, bottom: THIN, left: THIN, right: THIN };
+          if (!gst.font && gFont) gst.font = gFont;
+          gcell.style = gst;
+        }
+      }
+      rma = { titleRow: titleRow, firstRow: titleRow + 1, lastRow: at > titleRow + 1 ? at - 1 : 0, rows: rmaList.length, spare: spare };
       outRow = at;
     }
 
@@ -1350,12 +1393,18 @@
     var multiKeys = {}, diffKeys = {};
     var blocks = mpsBlocks(main, o.keyCol, o.dataStartRow);
     var lastDataRow = blocks.rmaLast || blocks.mainLast;   // 一般 MPS 和 RMA 都要查；匯總列不算資料
+    var spare = [];                                         // RMA 預留列（料號空白）的列號
     for (var r = o.dataStartRow; r <= lastDataRow; r++) {
       if (r === blocks.rmaTitle) continue;                  // 「RMA」標題那一列
       var row = main.findRow(r);
       var cell = row ? row.findCell(o.keyCol) : null;
       var key = lookupKey(cellRawValue(cell));
-      if (key === '') { blank++; continue; }
+      if (key === '') {
+        // RMA 區的空白列是預留列：填查表公式，之後在 Excel 填料號就會自動帶 CT.
+        if (blocks.rmaTitle && r >= blocks.rmaFirst && r <= blocks.rmaLast) spare.push(r);
+        else blank++;
+        continue;
+      }
       var hits = index[key];
       var item = { row: r, key: key, label: displayText(cell), refRow: 0, value: null, error: null };
       if (hits && hits.length) {
@@ -1388,6 +1437,7 @@
       lastCol: existing ? existing : lastCol,
       lastDataRow: lastDataRow,
       rmaTitle: blocks.rmaTitle,
+      spare: spare,
       rows: rows,
       found: found,
       missing: missing,
@@ -1396,6 +1446,23 @@
       multi: Object.keys(multiKeys).length,
       multiDiff: Object.keys(diffKeys).length
     };
+  }
+
+  /*
+   * RMA 預留列的 CT. 公式：料號空白時是 0；有料號就到 P003 查（Labor ÷ Base Qty），找不到也是 0（會標粉紅色）。
+   * 例如 =IF($A86="",0,IFERROR(INDEX('P003'!$M:$M,MATCH($A86,'P003'!$A:$A,0))/INDEX('P003'!$K:$K,MATCH($A86,'P003'!$A:$A,0)),0))
+   */
+  function spareLookupFormula(refName, r, o) {
+    var pre = sheetRef(refName);
+    var key = '$' + numToCol(o.keyCol) + r;
+    var K = '$' + numToCol(o.refKeyCol), V = '$' + numToCol(o.refValueCol);
+    var match = 'MATCH(' + key + ',' + pre + K + ':' + K + ',0)';
+    var f = 'INDEX(' + pre + V + ':' + V + ',' + match + ')';
+    if (o.refDivCol) {
+      var D = '$' + numToCol(o.refDivCol);
+      f += '/INDEX(' + pre + D + ':' + D + ',' + match + ')';
+    }
+    return 'IF(' + key + '="",0,IFERROR(' + f + ',0))';
   }
 
   // 某一列要填入的公式（不含開頭的 =），例如 'P003'!M5 或 'P003'!M5/'P003'!K5
@@ -1457,6 +1524,24 @@
         cell.value = null;
       }
     });
+
+    // RMA 預留列：查表公式，0 不顯示；有料號但 P003 找不到（CT. 是 0）時用條件式格式標粉紅色
+    plan.spare.forEach(function (r) {
+      var cell = main.getCell(r, col);
+      var base = main.findCell(r, plan.isNew ? plan.lastCol : col);
+      var style = Object.assign({}, base ? base.style : {});
+      if (isMissingFill(style.fill)) delete style.fill;
+      style.numFmt = HIDE_ZERO_GENERAL;
+      cell.style = style;
+      cell.value = { formula: spareLookupFormula(ref.name, r, o), result: 0 };
+      done[r] = true;
+    });
+    if (plan.spare.length) {
+      var L0 = numToCol(col), s0 = plan.spare[0], s1 = plan.spare[plan.spare.length - 1];
+      var sref = L0 + s0 + ':' + L0 + s1;
+      dropRule(main, sref);
+      main.addConditionalFormatting({ ref: sref, rules: [spareMissingRule(main, o.keyCol, col, s0)] });
+    }
 
     // 重做時，把這一行裡不再對得到的舊內容清掉
     if (!plan.isNew) {
@@ -1534,7 +1619,9 @@
     var old = findBlock(main, headerEnd, o.title);
     var startCol = old ? old.col : ext.colCount + 2;
     var lastRow = ext.lastRow;
-    var rmaTitle = rmaTitleRow(main, o.dataStartRow);   // 「RMA」標題那一列不算資料
+    var blocks = mpsBlocks(main, o.keyCol, o.dataStartRow);
+    var rmaTitle = blocks.rmaTitle;                      // 「RMA」標題那一列不算資料
+    var spare = [];                                      // RMA 預留列（料號空白）：一樣填公式
 
     var headers = o.monthCols.map(function (c, i) {
       return o.headers && o.headers[i] !== undefined ? normalizeText(o.headers[i]) : '';
@@ -1549,7 +1636,11 @@
       if (r === rmaTitle) continue;
       var keyCell = row.findCell(o.keyCol);
       var label = keyCell ? displayText(keyCell) : '';
-      if (normalizeText(label) === '') continue;
+      var spareRow = false;
+      if (normalizeText(label) === '') {
+        if (!(rmaTitle && r >= blocks.rmaFirst && r <= blocks.rmaLast)) continue;
+        spareRow = true;
+      }
       var ct = numberOrError(row.findCell(o.ctCol));
       var wip = numberOrError(row.findCell(o.wipCol));
       var item = { row: r, label: label, ct: ct.error ? ct.error : ct.value, noCt: !!ct.blank, values: [], formulas: [] };
@@ -1567,6 +1658,7 @@
         }
         if (err) bad = true;
       });
+      if (spareRow) { spare.push(item); continue; }
       if (item.noCt) noCt++;
       if (bad) errors++;
       rows.push(item);
@@ -1579,7 +1671,8 @@
       headers: headers,
       rows: rows,
       noCt: noCt,
-      errors: errors
+      errors: errors,
+      spare: spare           // RMA 預留列 [{ row, formulas, values }]（不算在 rows 裡）
     };
   }
 
@@ -1659,6 +1752,24 @@
         cell.value = { formula: item.formulas[i], result: item.values[i] };
       }
     });
+
+    // RMA 預留列：公式一樣，0 不顯示；有料號但 CT. 是 0（P003 找不到）時標粉紅色
+    plan.spare.forEach(function (item) {
+      for (var i = 0; i < n; i++) {
+        var cell = main.getCell(item.row, start + i);
+        var base = main.findCell(item.row, o.monthCols[i]);
+        var style = Object.assign({}, base ? base.style : {});
+        style.numFmt = HIDE_ZERO_INTEGER;
+        cell.style = style;
+        cell.value = { formula: item.formulas[i], result: item.values[i] && item.values[i].error ? 0 : item.values[i] };
+      }
+    });
+    if (plan.spare.length) {
+      var s0 = plan.spare[0].row, s1 = plan.spare[plan.spare.length - 1].row;
+      var sref = numToCol(start) + s0 + ':' + numToCol(end) + s1;
+      dropRule(main, sref);
+      main.addConditionalFormatting({ ref: sref, rules: [spareMissingRule(main, o.keyCol, o.ctCol, s0)] });
+    }
 
     for (c = start; c <= end; c++) main.getColumn(c).width = 12;
 
@@ -2127,8 +2238,8 @@
     // 公式寫的是左上角那一格（例如 N5），Excel 會自動套用到範圍裡的每一格：
     //   =AND(N5>0, N5>=LARGE(N$5:N$74,3))    大於 0，而且不小於這個月第三大的數值
     var blockRef = function (ref) {
-      var m = /^([A-Z]+)\d+:([A-Z]+)\d+$/.exec(String(ref || ''));
-      return !!m && colToNum(m[1]) >= plan.startCol && colToNum(m[2]) <= endCol;
+      var m = /^([A-Z]+)(\d+):([A-Z]+)\d+$/.exec(String(ref || ''));
+      return !!m && Number(m[2]) === plan.firstRow && colToNum(m[1]) >= plan.startCol && colToNum(m[3]) <= endCol;
     };
     main.conditionalFormattings = (main.conditionalFormattings || []).filter(function (cf) {
       return !blockRef(cf.ref);
@@ -2898,7 +3009,7 @@
   }
 
   var ExcelIO = {
-    VERSION: 45,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
+    VERSION: 46,           // 程式版本，顯示在畫面右上角；每次改版加 1（index.html 的 ?v= 也要改）
     colToNum: colToNum,
     numToCol: numToCol,
     normalizeText: normalizeText,

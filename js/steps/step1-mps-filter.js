@@ -15,6 +15,8 @@
  *      符合的列逐列列出、預設打勾；取消勾選的列留在一般 MPS（不記住，因為每個月列號不同）。
  *      RMA 的列移到一般 MPS 最後一列之後第 8 列起：空一列、三列留給第 2 步的匯總（Total／Top 3／Non-Top 3）、
  *      再空三列，然後是一列「RMA」標題（跨保留的行合併置中），下面是 RMA 的列。沒有 RMA 時一樣留標題。
+ *      RMA 的列下面再預留幾列空白（預設 6，可以改、會記住），之後在 Excel 手動新增 RMA 用；
+ *      整個 RMA 區畫細格線，第 4、5 步會在預留列先寫好 CT.（查 P003）和需求工時的公式。
  *   5. 匯出新的 Excel，第 1–4 列表頭（含合併儲存格）原樣保留
  *
  * 做完之後把結果放在 IEApp.state.mpsFiltered，第 2 步直接拿來用。
@@ -40,7 +42,8 @@
   var DEFAULTS = {
     values: '', cols: '', startRow: 5, selCol: 'A', mode: 'a', fCol: '', fOp: 'eq', fValues: '', fSkipBlank: true,
     zCol: '', zOp: 'eq', zValues: ['', '', ''],
-    rmaCol: '', rmaOp: 'fz', rmaValues: ['', '', '']    // 挑出 RMA：哪一行、'fz' 模糊比對／'eq' 等於、各輸入框的值
+    rmaCol: '', rmaOp: 'fz', rmaValues: ['', '', ''],   // 挑出 RMA：哪一行、'fz' 模糊比對／'eq' 等於、各輸入框的值
+    rmaSpare: '6'                                       // RMA 區預留幾列空白
   };
   var MAX_BLANK_LIST = 200;  // 空白列清單最多列幾列
   var MAX_FZ_LIST = 300;     // 模糊比對預覽最多列幾列
@@ -195,6 +198,9 @@
     els.rmaAdd = h('button', { type: 'button', class: 'link-btn fz-add', text: '＋ 再加一個輸入框', onclick: addRmaInput });
     els.rmaChips = h('div', { class: 'chips' });
     els.rmaList = h('div', { class: 'fz-preview', 'aria-live': 'polite' });
+    els.rmaSpare = h('input', {
+      id: 'f-rmaspare', type: 'text', class: 'in in-tiny', inputmode: 'numeric', autocomplete: 'off', value: String(settings.rmaSpare)
+    });
     buildRmaInputs();
 
     els.summary = h('p', { class: 'summary', 'aria-live': 'polite' });
@@ -243,10 +249,14 @@
             h('label', { for: 'f-selcol', text: '選取條件在' }), els.selCol, h('span', { text: '行' })))),
       h('li', { class: 'task' },
         h('h2', { text: '挑出 RMA' }),
-        h('p', { class: 'hint', text: '從保留的行裡挑出哪些列是 RMA。這些列會移到一般 MPS 的 Total 匯總下面（再空三列），上面加一列「RMA」標題；CT.、需求工時和一般 MPS 一樣算。這個月沒有 RMA 時，輸入框留空白就好（一樣會留一個空的 RMA 區塊，合計是 0）。' }),
+        h('p', { class: 'hint', text: '從保留的行裡挑出哪些列是 RMA。這些列會移到一般 MPS 的 Total 匯總下面（再空三列），上面加一列「RMA」標題；CT.、需求工時和一般 MPS 一樣算。這個月沒有 RMA 時，輸入框留空白就好（RMA 區只有預留的空白列，合計是 0）。下面的列還會再預留幾列空白，之後在 Excel 手動新增 RMA 用。' }),
         h('div', { class: 'field-row' },
           h('label', { for: 'f-rmacol', text: '看哪一行' }), els.rmaCol, els.rmaOp, h('span', { text: '下面任一個值' })),
-        els.rmaBox, h('div', null, els.rmaAdd), els.rmaChips, els.rmaList),
+        els.rmaBox, h('div', null, els.rmaAdd),
+        h('div', { class: 'field-row rma-spare' },
+          h('label', { for: 'f-rmaspare', text: '預留空白列' }), els.rmaSpare,
+          h('span', { text: '列（放在 RMA 的列下面，之後在 Excel 手動新增 RMA 用；CT.、需求工時的公式會先寫好）' })),
+        els.rmaChips, els.rmaList),
       h('li', { class: 'task' },
         h('h2', { text: '匯出' }),
         els.summary, els.outPreview,
@@ -272,6 +282,7 @@
     els.values.addEventListener('focus', function () { setMode('a'); });
     [els.fCol, els.fOp, els.fValues].forEach(function (el) { el.addEventListener('focus', function () { setMode('col'); }); });
     els.rmaCol.addEventListener('change', function () { settings.rmaCol = els.rmaCol.value; recompute(); });
+    bindInput(els.rmaSpare, 'rmaSpare');
     els.rmaOp.addEventListener('change', function () { settings.rmaOp = els.rmaOp.value === 'eq' ? 'eq' : 'fz'; recompute(); });
     bindInput(els.cols, 'cols');
     bindInput(els.startRow, 'startRow');
@@ -328,6 +339,11 @@
     buildRmaInputs(Math.min(i, settings.rmaValues.length - 1));
     recompute();
   }
+  // 預留幾列空白（看不懂、負數當 0，最多 200）
+  function rmaSpare() {
+    var n = parseInt(XIO.normalizeText(settings.rmaSpare), 10);
+    return n > 0 ? Math.min(n, 200) : 0;
+  }
   function rmaValues() {
     return settings.rmaValues.map(function (v) { return XIO.normalizeText(v); }).filter(function (v) { return v !== ''; });
   }
@@ -376,11 +392,11 @@
       if (seen.length > MAX_CHIPS) els.rmaChips.appendChild(h('span', { class: 'chips-more', text: '另有 ' + (seen.length - MAX_CHIPS) + ' 種' }));
     }
     if (!values.length) {
-      els.rmaList.appendChild(h('p', { class: 'blank-none', text: '沒有輸入值：這個月不分 RMA，匯出時留一個空的 RMA 區塊。' }));
+      els.rmaList.appendChild(h('p', { class: 'blank-none', text: '沒有輸入值：這個月不分 RMA，RMA 區只有預留的 ' + rmaSpare() + ' 列空白。' }));
       return;
     }
     if (!picks.length) {
-      els.rmaList.appendChild(h('p', { class: 'blank-none', text: colName + ' 行沒有符合的列。RMA 區塊會是空的（RMA Total、RMA總需求工時都是 0）。' }));
+      els.rmaList.appendChild(h('p', { class: 'blank-none', text: colName + ' 行沒有符合的列。RMA 區只有預留的 ' + rmaSpare() + ' 列空白（RMA Total、RMA總需求工時先是 0）。' }));
       return;
     }
     var off = picks.filter(function (p) { return S.rmaOff[p.row]; }).length;
@@ -676,7 +692,7 @@
     var opts = {
       dataStartRow: sr, selectorCol: sc, values: values, keepCols: parsed.cols, lastRow: info.lastRow,
       exclude: exclude(), skipBlank: skipBlank(), keepBlankRows: keepBlank, fuzzy: byFuzzy(),
-      rmaBlock: true, rmaRows: {}
+      rmaBlock: true, rmaRows: {}, rmaSpare: rmaSpare()
     };
 
     // 挑出 RMA：在符合選取條件的列裡找，打勾的列放到 RMA 區塊
@@ -711,7 +727,8 @@
     }
     if (result.rma) {
       text += ' 其中 RMA ' + result.rma.rows.toLocaleString('en-US') + ' 列，放在匯出檔第 ' + result.rma.titleRow + ' 列的「RMA」標題下面' +
-        '（一般 MPS 到第 ' + (result.rma.titleRow - XIO.RMA_GAP) + ' 列）。';
+        '（一般 MPS 到第 ' + (result.rma.titleRow - XIO.RMA_GAP) + ' 列），再預留 ' + result.rma.spare + ' 列空白' +
+        (result.rma.lastRow ? '（RMA 區到第 ' + result.rma.lastRow + ' 列）' : '') + '。';
     }
     var beyond = parsed.cols.filter(function (c) { return c > info.colCount; });
     if (beyond.length) text += ' 注意：' + XIO.formatColumns(beyond) + ' 行在報表裡沒有資料。';
